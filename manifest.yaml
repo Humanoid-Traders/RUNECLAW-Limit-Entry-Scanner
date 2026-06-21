@@ -1,43 +1,46 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
 version: "0.1.0"
-description: "Live perpetual-futures scanner that ranks a configurable altcoin universe behind a market-regime gate and places pullback limit longs with risk-based sizing"
+description: "Live two-sided perpetual-futures scanner that ranks a configurable universe behind a market-regime gate and places pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
-  RUNECLAW is a long-only scanner for USDT-margined perpetual futures that aims
-  to buy strength on a pullback rather than chasing price. The thesis is that the
-  cleanest intraday longs come from assets already showing relative strength
-  against the broader market, trading in the upper part of their recent range,
-  supported by real resting demand, while the market leader itself is in a
-  constructive regime. Before any candidate is considered, the strategy checks
-  the lead asset's regime; when that backdrop is weak it stands aside entirely
-  and opens nothing, treating capital preservation as the first job.
+  RUNECLAW is a two-sided scanner for USDT-margined perpetual futures that aims
+  to trade with the prevailing regime rather than against it. The thesis is that
+  the cleanest intraday entries come from assets already moving in the leader's
+  direction, positioned in the favorable part of their recent range, supported by
+  real resting demand on the side it wants to trade. Before any candidate is
+  considered, the strategy reads the market leader's regime; when that backdrop is
+  weak or mixed it stands aside entirely and opens nothing, treating capital
+  preservation as the first job.
 
-  When the regime is constructive, the scanner ranks the configured universe with
-  a blended score built from relative momentum, location versus the day's
-  volume-weighted average price, position within the session range, resting
-  order-book balance between bids and offers, and traded liquidity. Only names
-  that clear a quality bar become candidates. The strategy enters long with a
-  resting limit order placed below the day's average price, so it waits for a
-  normal retracement to come to it instead of paying up: shallow enough to still
-  fill on ordinary dips, deep enough to avoid buying the high.
+  When the leader is constructive the scanner looks for longs; when the leader is
+  clearly weak it looks for shorts. Either way it ranks the configured universe
+  with a blended score built from relative strength versus the leader, location
+  against the day's volume-weighted average price, position within the session
+  range, resting order-book balance, and traded liquidity, with every dimension
+  mirrored for the side being sought. Only names that clear a quality bar become
+  candidates. It enters with a resting limit order placed on the favorable side of
+  the day's average price, waiting for a normal retracement instead of chasing.
 
-  Exits are layered. A protective stop sits beneath the level the market has
-  already defended, and profit is taken in stages: a first target locks in gains
-  quickly, a further target extends the move, and a remaining portion is trailed
-  with a volatility-based stop so a strong run can keep working. Once a trade
-  moves enough in favor, the stop is lifted toward breakeven to remove downside.
+  Exits are layered and risk-first. A protective stop sits beyond the level the
+  market has recently defended, profit is taken in stages, a remaining portion is
+  trailed so a strong move can keep working, and the stop is lifted toward
+  breakeven once a trade moves enough in favor. A portfolio layer caps how many
+  positions run at once, limits correlated exposure, expires stale resting orders,
+  applies an intraday time-stop, and halts new entries when the day's running loss
+  breaches a circuit breaker.
 
-  Subscribers can tune the tradable universe, the leverage applied, the margin
-  budget that anchors sizing and the return percentage shown, the per-trade
-  dollar risk cap that drives position size backward from the stop, the number of
-  names scanned per pass, and the minimum score required to act. Raising leverage
-  or the risk cap enlarges both gains and drawdowns; widening the universe spreads
-  attention but increases data load.
+  Subscribers can tune the universe, leverage, the margin budget that anchors
+  sizing and the displayed return, the per-trade dollar risk cap, the number of
+  names scanned per pass, the score required to act, whether shorting is enabled,
+  and how many positions may run concurrently. Higher leverage or risk cap
+  enlarges gains and drawdowns alike; widening the universe spreads attention but
+  increases data load.
 
-  The strategy underperforms when the leader is choppy or falling, when breadth is
-  weak, or when thin names gap through stops; it can sit idle for long stretches
-  by design. Past performance is not a guarantee, and live trading pays fees and
-  slippage that erode edge, so size it to a drawdown you can tolerate.
+  The strategy underperforms when the leader chops without direction, when breadth
+  is weak, or when fast moves slice through stops; by design it can sit idle for
+  long stretches. Past performance is not a guarantee, and live trading pays fees
+  and slippage that erode edge, so size every position to a drawdown you can
+  tolerate.
 market_type: contract
 trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "JTOUSDT", "BNBUSDT", "SUIUSDT", "FILUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "SKYAIUSDT", "BCHUSDT", "AVAXUSDT", "PENGUUSDT", "SIRENUSDT", "DOTUSDT", "ICPUSDT", "NEARUSDT", "LTCUSDT", "VIRTUALUSDT", "PUMPUSDT", "DYDXUSDT", "WLFIUSDT", "FARTCOINUSDT", "AAVEUSDT", "UNIUSDT", "OPUSDT", "ASTERUSDT", "DASHUSDT", "WLDUSDT", "WIFUSDT", "ORDIUSDT", "ARBUSDT", "TRXUSDT", "XPLUSDT", "RAVEUSDT", "XLMUSDT", "ETCUSDT", "TRUMPUSDT", "APTUSDT", "HBARUSDT", "1000BONKUSDT", "VVVUSDT", "BIOUSDT", "MUSDT", "CHIPUSDT", "PENDLEUSDT", "XMRUSDT", "ALGOUSDT", "CRVUSDT", "TIAUSDT", "RENDERUSDT", "INJUSDT", "JUPUSDT", "FETUSDT", "APEUSDT", "SEIUSDT", "ATOMUSDT", "LDOUSDT"]
 tags: ["scanner", "momentum", "vwap", "orderbook", "contract", "live", "runeclaw"]
@@ -72,6 +75,14 @@ strategy_config:
   bidask_full_ratio: "2.0"
   bidask_partial_ratio: "1.2"
   bidask_wall_ratio: "10.0"
+  allow_short: true
+  max_concurrent: 3
+  max_correlated_alts: 2
+  circuit_pause_usdt: "30"
+  circuit_stop_usdt: "40"
+  time_stop_hours: "4"
+  limit_expiry_hours: "4"
+  breakeven_trigger_usdt: "20"
 
 user_config_schema:
   trading_symbols:
@@ -112,4 +123,14 @@ user_config_schema:
     default: 70
     min: 1
     max: 100
-    label: "Minimum score to place a long"
+    label: "Minimum score to place a long or short"
+  allow_short:
+    type: boolean
+    default: true
+    label: "Enable short-side setups"
+  max_concurrent:
+    type: integer
+    default: 3
+    min: 1
+    max: 10
+    label: "Max concurrent open positions"
