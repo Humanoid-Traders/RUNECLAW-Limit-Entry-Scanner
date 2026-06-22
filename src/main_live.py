@@ -89,8 +89,16 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     circuit = mgmt.get("circuit", "ok")
     size_mode = "full" if reg.size_factor >= 1.0 else ("reduced" if reg.size_factor > 0 else "blocked")
 
+    btc_vs_vwap = round((btc.last / btc.vwap - 1.0) * 100.0, 3) if (btc.ok and btc.last and btc.vwap) else None
     base_metrics = {
-        "regime": direction,
+        "regime": {"direction": direction, "gate_open": direction != "none", "btc_vs_vwap": btc_vs_vwap},
+        "regime_dir": direction,
+        "data_health": {
+            "kline_ok": bool(btc.ok and btc.last is not None and btc.vwap is not None
+                             and btc.high is not None and btc.low is not None),
+            "book_ok": bool(btc.bid_volume is not None and btc.ask_volume is not None),
+            "funding_ok": bool(taker is not None),
+        },
         "long_gate_score": reg.detail.get("long_gate_score"),
         "short_gate_score": reg.detail.get("short_gate_score"),
         "best_score": best_score,
@@ -211,6 +219,16 @@ def run() -> None:
             trade_result = {"placed": False, "reason": "execute_exception:" + type(exc).__name__}
     decision["meta"]["follow_trade"] = follow
     decision["meta"]["trade_result"] = trade_result
+
+    # Promote the decisive diagnostics into top-level metrics (v0.1.3) so the
+    # subscription-layer catalog surfaces them without the playbook's meta.
+    tr = trade_result or {}
+    decision["metrics"]["trade_result"] = {
+        "placed": tr.get("placed") if trade_result is not None else None,
+        "reason": tr.get("reason", "" if actionable else "no_actionable_signal"),
+        "symbol": tr.get("symbol", decision["symbol"]),
+        "score": decision["metrics"].get("best_score"),
+    }
 
     runtime.emit_signal(
         action=decision["action"],
