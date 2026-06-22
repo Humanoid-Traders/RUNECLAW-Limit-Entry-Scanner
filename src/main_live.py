@@ -197,6 +197,10 @@ def run() -> None:
         follow = runtime.is_follow_trade()
     except Exception:
         follow = False
+    try:
+        exec_mode = str(runtime.execution_mode())
+    except Exception:
+        exec_mode = "?"
 
     mgmt: dict = {"circuit": "ok"}
     if follow:
@@ -208,18 +212,51 @@ def run() -> None:
     decision = build_decision(cfg, mgmt)
     decision["meta"]["follow_trade"] = follow
 
-    # v0.1.6: execute through the sanctioned runtime.emit_signal_or_follow flow.
-    # The inline open_if_allowed() used in v0.1.2-0.1.5 emitted signals fine but
-    # never placed orders -- the runtime only arms the managed trade proxy inside
-    # the execute_trade callback, so direct calls are silently dropped. This puts
-    # order placement back inside that callback.
+    # v0.1.7 diagnostic: keep the sanctioned emit_signal_or_follow trade path, but
+    # capture (a) whether the runtime actually invoked our trade callback and
+    # (b) the placement result, via a closure. Then emit a second, readable signal
+    # encoding it -- the catalog exposes only action/symbol/confidence, so the
+    # diagnosis is packed into those.
+    captured = {"called": False}
+
+    def _execute():
+        captured["called"] = True
+        try:
+            res = execution.open_if_allowed(decision, cfg, mgmt) or {}
+        except Exception as exc:
+            res = {"placed": False, "reason": "exc_" + type(exc).__name__}
+        captured.update(res)
+        return res
+
     runtime.emit_signal_or_follow(
         action=decision["action"],
         symbol=decision["symbol"],
         confidence=decision["confidence"],
         metrics=_sanitize(decision["metrics"]),
         meta=_sanitize(decision["meta"]),
-        execute_trade=lambda: execution.open_if_allowed(decision, cfg, mgmt),
+        execute_trade=_execute,
+    )
+
+    called = bool(captured.get("called"))
+    placed = captured.get("placed")
+    full_reason = str(captured.get("reason", "")) or "none"
+    reason = full_reason.replace(" ", "_")[:42]
+    emc = {"follow_trade": "F", "signal_only": "S"}.get(exec_mode, "?")
+    pcode = "1" if placed is True else ("0" if placed is False else "X")
+    # Pack the whole follow-trade outcome into the only catalog-readable fields
+    # (symbol + confidence): mode / is_follow / callback-invoked / placed / reason.
+    # e.g. DIAG-mFf1c1pX-exchange_reject:40774:... -> follow mode, callback fired,
+    # placement returned None, blocked by the named exchange reject.
+    diag = "DIAG-m{m}f{f}c{c}p{p}-{r}".format(
+        m=emc, f=int(follow), c=int(called), p=pcode, r=reason)[:63]
+    conf = round(0.500 + 0.100 * int(follow) + 0.030 * int(called) + (0.003 if placed is True else 0.0), 3)
+    runtime.emit_signal(
+        action="watch",
+        symbol=diag,
+        confidence=conf,
+        metrics={"diag": diag, "exec_mode": exec_mode, "follow": follow,
+                 "exec_called": called, "placed": placed, "reason": full_reason[:120]},
+        meta={"diag": diag, "reason_full": full_reason[:200]},
     )
 
 

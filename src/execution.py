@@ -83,6 +83,24 @@ def _find_string(record: dict, keys: tuple) -> str:
     return ""
 
 
+def _result_reason(result: Any) -> str:
+    """Compact exchange rejection reason from a non-success trade envelope.
+
+    Bitget envelopes carry the original ``{"code", "msg"}`` on ``result.raw``;
+    fall back to the envelope itself, then to ``str(result)``. This is what turns
+    a silent ``placed=False`` into an operator-readable ``code:msg`` cause.
+    """
+    raw = getattr(result, "raw", None)
+    mapping = _to_mapping(raw) or _to_mapping(result) or {}
+    code = mapping.get("code") or mapping.get("retCode") or mapping.get("sCode")
+    msg = (mapping.get("msg") or mapping.get("message") or mapping.get("retMsg")
+           or mapping.get("sMsg"))
+    if code not in (None, "") or msg not in (None, ""):
+        return "{}:{}".format(code if code not in (None, "") else "?", msg or "")[:48]
+    text = str(result).replace(" ", "_")
+    return text[:48] if text else "unknown"
+
+
 def _read_state() -> dict:
     try:
         if _STATE_FILE.exists():
@@ -411,22 +429,33 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
         return {"placed": False, "reason": "tpsl_error:" + type(exc).__name__}
 
     opener = trade.contract.open_short_limit if side == "short" else trade.contract.open_long_limit
-    result = opener(
-        symbol=symbol, qty=qty_plan.qty, price=entry_price, leverage=leverage,
-        tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
-    )
+    try:
+        result = opener(
+            symbol=symbol, qty=qty_plan.qty, price=entry_price, leverage=leverage,
+            tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
+        )
+    except Exception as exc:
+        return {"placed": False, "reason": "open_raise:" + type(exc).__name__,
+                "symbol": symbol, "side": side,
+                "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price)}
+
     placed = bool(trade.is_success(result))
+    out = {
+        "placed": placed, "symbol": symbol, "side": side,
+        "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price),
+        "tp1": str(tpsl.tp_trigger_price), "sl": str(tpsl.sl_trigger_price),
+    }
     if placed:
         # Tag the symbol as RUNECLAW-owned so management controls (time-stop,
         # auto-BE, limit-expiry, circuit-flatten) only ever touch this position.
         owned = _read_owned()
         owned.add(symbol.upper())
         _write_owned(owned)
-    return {
-        "placed": placed, "symbol": symbol, "side": side,
-        "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price),
-        "tp1": str(tpsl.tp_trigger_price), "sl": str(tpsl.sl_trigger_price),
-    }
+    else:
+        # Surface the exchange's own rejection so a fully-sized, fully-guarded
+        # order that never rests on the book stops being a silent no-op.
+        out["reason"] = "exchange_reject:" + _result_reason(result)
+    return out
 
 
 def _align(price: Any, step: Any) -> str:
