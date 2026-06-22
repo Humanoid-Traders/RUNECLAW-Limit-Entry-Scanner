@@ -206,36 +206,20 @@ def run() -> None:
             mgmt = {"circuit": "ok", "mgmt_error": type(exc).__name__}
 
     decision = build_decision(cfg, mgmt)
-
-    # Diagnostic (v0.1.2): run execution in-line for follow-trade + actionable
-    # signals and stamp {placed, reason} into the emitted signal, so one relayed
-    # payload shows exactly why an order did or did not reach the exchange.
-    trade_result = None
-    actionable = decision["action"] in ("long", "short")
-    if follow and actionable:
-        try:
-            trade_result = execution.open_if_allowed(decision, cfg, mgmt)
-        except Exception as exc:
-            trade_result = {"placed": False, "reason": "execute_exception:" + type(exc).__name__}
     decision["meta"]["follow_trade"] = follow
-    decision["meta"]["trade_result"] = trade_result
 
-    # Promote the decisive diagnostics into top-level metrics (v0.1.3) so the
-    # subscription-layer catalog surfaces them without the playbook's meta.
-    tr = trade_result or {}
-    decision["metrics"]["trade_result"] = {
-        "placed": tr.get("placed") if trade_result is not None else None,
-        "reason": tr.get("reason", "" if actionable else "no_actionable_signal"),
-        "symbol": tr.get("symbol", decision["symbol"]),
-        "score": decision["metrics"].get("best_score"),
-    }
-
-    runtime.emit_signal(
+    # v0.1.6: execute through the sanctioned runtime.emit_signal_or_follow flow.
+    # The inline open_if_allowed() used in v0.1.2-0.1.5 emitted signals fine but
+    # never placed orders -- the runtime only arms the managed trade proxy inside
+    # the execute_trade callback, so direct calls are silently dropped. This puts
+    # order placement back inside that callback.
+    runtime.emit_signal_or_follow(
         action=decision["action"],
         symbol=decision["symbol"],
         confidence=decision["confidence"],
         metrics=_sanitize(decision["metrics"]),
         meta=_sanitize(decision["meta"]),
+        execute_trade=lambda: execution.open_if_allowed(decision, cfg, mgmt),
     )
 
 
