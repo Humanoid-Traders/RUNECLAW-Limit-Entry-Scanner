@@ -134,3 +134,9 @@ user_config_schema:
     min: 1
     max: 10
     label: "Max concurrent open positions"
+  atr_limit_mult:
+    type: number
+    default: 0.5
+    min: 0.1
+    max: 1.5
+    label: "Limit-entry depth (x ATR from VWAP; lower fills sooner)"
