@@ -12,34 +12,46 @@ from typing import Any, Optional
 from getagent import data
 
 
+def _model_dict(obj: Any) -> dict:
+    if isinstance(obj, dict):
+        return obj
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        try:
+            out = dump()
+            return out if isinstance(out, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _to_records(obb: Any) -> list:
-    """Normalize an OBBject / DataFrame / dict response into a list of dict rows."""
+    """Normalize an OBBject response into a list of dict rows.
+
+    The SDK's OBBject exposes no instance ``to_*`` methods; the real data lives
+    in ``obb.results`` (a dict for snapshots such as ticker, a list for series
+    such as kline), and the sanctioned converters are the module-level
+    ``data.to_records(obb)`` helpers.
+    """
     if obb is None:
         return []
-    for attr in ("to_records", "to_dict"):
-        fn = getattr(obb, attr, None)
-        if not callable(fn):
-            continue
+    converter = getattr(data, "to_records", None)
+    if callable(converter):
         try:
-            out = fn()
+            out = converter(obb)
+            if isinstance(out, list):
+                recs = [r for r in (_model_dict(item) for item in out) if r]
+                if recs:
+                    return recs
         except Exception:
-            continue
-        if isinstance(out, list):
-            return [r for r in out if isinstance(r, dict)]
-        if isinstance(out, dict):
-            values = list(out.values())
-            if values and all(isinstance(v, (list, tuple)) for v in values):
-                keys = list(out.keys())
-                length = min(len(out[k]) for k in keys)
-                return [{k: out[k][i] for k in keys} for i in range(length)]
-            return [out]
-    to_df = getattr(obb, "to_dataframe", None)
-    if callable(to_df):
-        try:
-            return to_df().to_dict("records")
-        except Exception:
-            return []
-    return []
+            pass
+    results = getattr(obb, "results", None)
+    if isinstance(results, dict):
+        return [results]
+    if isinstance(results, list):
+        return [r for r in (_model_dict(item) for item in results) if r]
+    single = _model_dict(results)
+    return [single] if single else []
 
 
 def _f(value: Any) -> Optional[float]:
