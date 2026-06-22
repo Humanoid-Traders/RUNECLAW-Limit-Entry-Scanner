@@ -116,6 +116,39 @@ def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
+def _read_owned() -> set:
+    state = _read_state()
+    raw = state.get("owned_symbols") or []
+    return {str(s).upper() for s in raw if s}
+
+
+def _write_owned(owned: set) -> None:
+    state = _read_state()
+    state["owned_symbols"] = sorted(owned)
+    _write_state(state)
+
+
+def _pending_symbols() -> set:
+    """Symbols with a live RUNECLAW resting limit (or any pending order)."""
+    try:
+        pending = trade.contract.pending_orders()
+    except Exception:
+        return set()
+    mapping = _to_mapping(pending) or {}
+    rows = mapping.get("data") or mapping.get("list") or []
+    if isinstance(rows, dict):
+        rows = rows.get("list") or rows.get("entrustedList") or []
+    out = set()
+    if isinstance(rows, list):
+        for row in rows:
+            rec = _to_mapping(row)
+            if rec:
+                sym = _find_string(rec, ("symbol",))
+                if sym:
+                    out.add(sym.upper())
+    return out
+
+
 def manage_open_state(cfg: dict) -> dict:
     actions: list = []
     status = {
@@ -123,6 +156,8 @@ def manage_open_state(cfg: dict) -> dict:
         "today_pnl": None,
         "open_count": 0,
         "open_symbols": [],
+        "owned_symbols": [],
+        "all_account_symbols": [],
         "controls_active": {"circuit_breaker": False, "time_stop": False, "auto_be": False},
         "actions": actions,
     }
@@ -136,7 +171,8 @@ def manage_open_state(cfg: dict) -> dict:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if equity is not None:
         if state.get("date") != today or "day_start_equity" not in state:
-            state = {"date": today, "day_start_equity": equity}
+            state["date"] = today
+            state["day_start_equity"] = equity
         today_pnl = equity - float(state.get("day_start_equity", equity))
         status["today_pnl"] = round(today_pnl, 4)
         status["controls_active"]["circuit_breaker"] = True
@@ -147,38 +183,64 @@ def manage_open_state(cfg: dict) -> dict:
         state["last_equity"] = equity
         _write_state(state)
 
-    # --- live position snapshot (documented helpers) ---
+    # --- live position snapshot (all account positions) ---
     try:
         positions = trade.contract.current_position()
-        status["open_count"] = int(trade.helpers.count_open_contract_positions(positions) or 0)
-        status["open_symbols"] = list(trade.helpers.contract_open_symbols(positions) or [])
-        records = trade.helpers.contract_position_records(positions)
+        all_symbols = {s.upper() for s in (trade.helpers.contract_open_symbols(positions) or [])}
+        records = trade.helpers.contract_position_records(positions) or []
     except Exception as exc:
         status["position_query_error"] = type(exc).__name__
-        records = []
+        all_symbols, records = set(), []
+
+    # --- ownership scope: only manage what RUNECLAW opened ---
+    # Reconcile owned set: drop symbols that have neither a live position nor a
+    # pending entry of ours; everything else stays.
+    pending = _pending_symbols()
+    owned = _read_owned()
+    owned = {s for s in owned if s in all_symbols or s in pending}
+    _write_owned(owned)
+
+    owned_open = owned & all_symbols
+    status["all_account_symbols"] = sorted(all_symbols)
+    status["owned_symbols"] = sorted(owned)
+    status["open_symbols"] = sorted(owned_open)
+    status["open_count"] = len(owned_open)
+
+    owned_records = [r for r in records if _find_string(r, ("symbol",)).upper() in owned]
 
     if status["circuit"] == "tripped":
-        _flatten_all(cfg, records, actions)
+        _flatten_owned(cfg, owned_records, owned, actions)
         return status
 
-    _best_effort_position_controls(cfg, records, status, actions)
-    _best_effort_limit_expiry(cfg, actions)
+    _best_effort_position_controls(cfg, owned_records, status, actions)
+    _best_effort_limit_expiry(cfg, owned, actions)
     return status
 
 
-def _flatten_all(cfg: dict, records: list, actions: list) -> None:
-    """Circuit breaker hard stop: cancel resting orders and close open positions."""
+def _flatten_owned(cfg: dict, owned_records: list, owned: set, actions: list) -> None:
+    """Circuit hard-stop: cancel ONLY RUNECLAW's resting orders + close ONLY its
+    positions. Never touches account positions opened outside the playbook."""
     try:
         pending = trade.contract.pending_orders()
-        selection = trade.helpers.select_contract_order(pending, prefer_first=True)
-        order_id = getattr(selection, "order_id", "")
-        symbol = getattr(selection, "symbol", "")
-        if order_id and symbol:
-            trade.contract.cancel_order(symbol=symbol, order_id=order_id)
-            actions.append({"circuit_cancel": symbol})
     except Exception:
-        pass
-    for record in records:
+        pending = None
+    mapping = _to_mapping(pending) or {}
+    rows = mapping.get("data") or mapping.get("list") or []
+    if isinstance(rows, dict):
+        rows = rows.get("list") or rows.get("entrustedList") or []
+    if isinstance(rows, list):
+        for row in rows:
+            rec = _to_mapping(row) or {}
+            symbol = _find_string(rec, ("symbol",))
+            order_id = _find_string(rec, ("orderId", "order_id", "clientOid"))
+            if symbol and order_id and symbol.upper() in owned:
+                try:
+                    trade.contract.cancel_order(symbol=symbol, order_id=order_id)
+                    actions.append({"circuit_cancel": symbol})
+                except Exception:
+                    pass
+
+    for record in owned_records:
         symbol = _find_string(record, ("symbol",))
         hold_side = _find_string(record, _HOLD_SIDE_KEYS)
         if symbol and hold_side:
@@ -245,7 +307,9 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
         pass
 
 
-def _best_effort_limit_expiry(cfg: dict, actions: list) -> None:
+def _best_effort_limit_expiry(cfg: dict, owned: set, actions: list) -> None:
+    """Cancel ONLY RUNECLAW's stale resting limits. Never cancels non-RUNECLAW
+    orders the user placed by hand."""
     max_age_h = float(cfg.get("limit_expiry_hours", "4"))
     now_ms = _now_ms()
     try:
@@ -263,6 +327,8 @@ def _best_effort_limit_expiry(cfg: dict, actions: list) -> None:
         if not record:
             continue
         symbol = _find_string(record, ("symbol",))
+        if symbol.upper() not in owned:
+            continue
         order_id = _find_string(record, ("orderId", "order_id", "clientOid"))
         created = _find_number(record, _OPEN_TIME_KEYS)
         if symbol and order_id and created and created > 0:
@@ -350,6 +416,12 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
         tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
     )
     placed = bool(trade.is_success(result))
+    if placed:
+        # Tag the symbol as RUNECLAW-owned so management controls (time-stop,
+        # auto-BE, limit-expiry, circuit-flatten) only ever touch this position.
+        owned = _read_owned()
+        owned.add(symbol.upper())
+        _write_owned(owned)
     return {
         "placed": placed, "symbol": symbol, "side": side,
         "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price),
