@@ -59,6 +59,12 @@ def _gate_summary(reg: scoring.Regime) -> str:
             f"short_gate {detail.get('short_gate_score')}/2 | " + ", ".join(bits))
 
 
+def _field_health(ft) -> dict:
+    """Which ticker-derived fields actually populated (None = missing in live data)."""
+    return {k: (getattr(ft, k, None) is not None) for k in
+            ("last", "vwap", "high", "low", "change_pct", "quote_volume", "bid_volume", "ask_volume")}
+
+
 def build_decision(cfg: dict, mgmt: dict) -> dict:
     universe = [str(s).upper() for s in (cfg.get("trading_symbols") or [])]
     if _GATE not in universe:
@@ -102,6 +108,8 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "open_symbols": mgmt.get("open_symbols", []),
         "mgmt_actions": mgmt.get("actions", []),
         "controls_active": mgmt.get("controls_active", {}),
+        "data_health": {"BTC": _field_health(btc),
+                        **{s.symbol: _field_health(s.features) for s in scored[:3]}},
         "run_id": runtime.run_id,
     }
 
@@ -177,20 +185,39 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
 
 def run() -> None:
     cfg = _cfg()
+    try:
+        follow = runtime.is_follow_trade()
+    except Exception:
+        follow = False
+
     mgmt: dict = {"circuit": "ok"}
-    if runtime.is_follow_trade():
+    if follow:
         try:
             mgmt = execution.manage_open_state(cfg)
         except Exception as exc:
             mgmt = {"circuit": "ok", "mgmt_error": type(exc).__name__}
+
     decision = build_decision(cfg, mgmt)
-    runtime.emit_signal_or_follow(
+
+    # Diagnostic (v0.1.2): run execution in-line for follow-trade + actionable
+    # signals and stamp {placed, reason} into the emitted signal, so one relayed
+    # payload shows exactly why an order did or did not reach the exchange.
+    trade_result = None
+    actionable = decision["action"] in ("long", "short")
+    if follow and actionable:
+        try:
+            trade_result = execution.open_if_allowed(decision, cfg, mgmt)
+        except Exception as exc:
+            trade_result = {"placed": False, "reason": "execute_exception:" + type(exc).__name__}
+    decision["meta"]["follow_trade"] = follow
+    decision["meta"]["trade_result"] = trade_result
+
+    runtime.emit_signal(
         action=decision["action"],
         symbol=decision["symbol"],
         confidence=decision["confidence"],
         metrics=_sanitize(decision["metrics"]),
         meta=_sanitize(decision["meta"]),
-        execute_trade=lambda: execution.open_if_allowed(decision, cfg, mgmt),
     )
 
 
