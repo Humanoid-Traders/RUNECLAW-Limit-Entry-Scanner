@@ -65,6 +65,7 @@ strategy_config:
   conditional_score: 50
   min_volume_usdt: "10000000"
   atr_limit_mult: "0.5"
+  max_vwap_ext_pct: "4.0"
   tp1_pct: "3.5"
   tp2_pct: "7.0"
   trail_atr_mult: "1.0"
@@ -140,3 +141,8 @@ user_config_schema:
     min: 0.1
     max: 1.5
     label: "Limit-entry depth (x ATR from VWAP; lower fills sooner)"
+  max_vwap_ext_pct:
+    type: string
+    default: "4.0"
+    pattern: "^[0-9]+(\\.[0-9]+)?$"
+    label: "Max distance from VWAP to enter (%; skips overextended momentum movers the limit can't fill)"

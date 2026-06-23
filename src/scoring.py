@@ -87,6 +87,7 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
     full_ratio = float(cfg.get("bidask_full_ratio", "2.0"))
     partial_ratio = float(cfg.get("bidask_partial_ratio", "1.2"))
     wall_ratio = float(cfg.get("bidask_wall_ratio", "10.0"))
+    max_ext_pct = float(cfg.get("max_vwap_ext_pct", "4.0")) / 100.0
 
     results = []
     for f in feats_list:
@@ -119,6 +120,20 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
         else:
             vwap_score = 10.0
         dims["vwap"] = vwap_score
+
+        # Extension guard: the entry is a VWAP-anchored pullback limit
+        # (long: VWAP - k*ATR; short mirrored), so it can only fill if price has
+        # not run too far from VWAP. Names extended beyond the cap on the entry
+        # side are momentum breakouts the limit model structurally cannot catch
+        # -- score them for the board but skip them as candidates.
+        if f.vwap and f.last is not None:
+            ext = (f.last - f.vwap) / f.vwap  # > 0 = above VWAP
+            dims["vwap_ext_pct"] = round(ext * 100.0, 3)
+            if not skip and max_ext_pct > 0:
+                if side == "long" and ext > max_ext_pct:
+                    skip, reason = True, "overextended_above_vwap"
+                elif side == "short" and ext < -max_ext_pct:
+                    skip, reason = True, "overextended_below_vwap"
 
         # Range position 0-20.
         span = (f.high - f.low) if (f.high is not None and f.low is not None) else 0.0
