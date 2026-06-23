@@ -147,6 +147,21 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     if plan is None or not plan.sizing_ok:
         return watch(best.symbol, "sizing_failed", {"tradable_candidates": len(qualified)})
 
+    # Pre-placement staleness skip (v0.1.17): if the limit entry is already more
+    # than limit_chase_pct from current price, it is not a fillable pullback -- in
+    # a fast move VWAP lags and the entry lands far from market, so it would just
+    # rest dead and clog a slot. Stand aside (WATCH) instead of placing it. Uses
+    # the price already fetched for this candidate; no pending-order query needed,
+    # so it is immune to the management-layer parse bug. The chase-guard remains a
+    # backstop for orders that drift stale AFTER a fillable placement.
+    chase_pct = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
+    cur = best.features.last
+    if chase_pct > 0 and cur and cur > 0 and plan.entry and plan.entry > 0:
+        gap = ((plan.entry - cur) / plan.entry) if plan.side == "short" else ((cur - plan.entry) / plan.entry)
+        if gap > chase_pct:
+            return watch(best.symbol, "entry_too_far_{:.1f}pct".format(gap * 100.0),
+                         {"tradable_candidates": len(qualified)})
+
     metrics = dict(base_metrics)
     metrics.update({
         "tradable_candidates": len(qualified),
@@ -258,7 +273,7 @@ def run() -> None:
     acts = len(mgmt.get("actions", []) or [])
     merr = str(mgmt.get("mgmt_error") or mgmt.get("position_query_error") or "ok")[:16]
     rshort = full_reason.replace(" ", "_")[:16]
-    pshape = str(mgmt.get("pending_shape", ""))[:18]
+    pshape = str(mgmt.get("pending_shape", ""))[:30]
     # When pT is still 0, show the pending-result shape (its top-level keys) so a
     # remaining parse miss vs a genuinely empty unfiltered result is visible.
     tail = ("shp." + pshape) if (str(pT) == "0" and pshape) else rshort

@@ -195,6 +195,27 @@ def _runeclaw_sized(record: dict, cfg: dict) -> bool:
     return notional <= budget * leverage * mult
 
 
+def _shape(value: Any, depth: int = 0) -> str:
+    """Compact structural description of a result envelope, recursing one level
+    into 'data', so a parse miss (rows present) vs an empty payload is visible."""
+    if depth > 3:
+        return "."
+    mapping = _to_mapping(value)
+    if mapping is not None:
+        ks = ";".join(str(k) for k in list(mapping.keys())[:4])
+        if "data" in mapping and depth < 2:
+            return ks + ">(" + _shape(mapping["data"], depth + 1) + ")"
+        return ks
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "L0"
+        first = _to_mapping(value[0])
+        inner = (";".join(str(k) for k in list(first.keys())[:4]) if first
+                 else type(value[0]).__name__)
+        return "L{}:{}".format(len(value), inner)
+    return type(value).__name__
+
+
 def manage_open_state(cfg: dict) -> dict:
     actions: list = []
     status = {
@@ -243,9 +264,7 @@ def manage_open_state(cfg: dict) -> dict:
         pending_raw = None
         status["pending_error"] = type(exc).__name__
     pending_records = _extract_rows(pending_raw) if pending_raw is not None else []
-    _pm = _to_mapping(pending_raw) or {}
-    status["pending_shape"] = (";".join(list(_pm.keys())[:5])[:28] if _pm
-                               else ("obj" if pending_raw is not None else "none"))
+    status["pending_shape"] = _shape(pending_raw)[:40] if pending_raw is not None else "none"
 
     # --- STATELESS ownership: scope to RUNECLAW-sized live orders/positions ---
     owned_position_records = [r for r in records if _runeclaw_sized(r, cfg)]
