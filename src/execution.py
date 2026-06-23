@@ -331,9 +331,14 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
 
 
 def _best_effort_limit_expiry(cfg: dict, owned: set, actions: list) -> None:
-    """Cancel ONLY RUNECLAW's stale resting limits. Never cancels non-RUNECLAW
-    orders the user placed by hand."""
+    """Cancel ONLY RUNECLAW's stale resting limits -- either past the time budget
+    (``limit_expiry_hours``) OR left behind when price ran more than
+    ``limit_chase_pct`` past the entry in the direction the limit can never fill
+    from (a short's sell-limit sits above market and dies if price collapses; a
+    long's buy-limit sits below market and dies if price runs up). Never cancels
+    non-RUNECLAW orders the user placed by hand. (v0.1.13)"""
     max_age_h = float(cfg.get("limit_expiry_hours", "4"))
+    chase_pct = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
     now_ms = _now_ms()
     try:
         pending = trade.contract.pending_orders()
@@ -353,15 +358,46 @@ def _best_effort_limit_expiry(cfg: dict, owned: set, actions: list) -> None:
         if symbol.upper() not in owned:
             continue
         order_id = _find_string(record, ("orderId", "order_id", "clientOid"))
+        if not symbol or not order_id:
+            continue
+
+        # 1) Time-based expiry.
         created = _find_number(record, _OPEN_TIME_KEYS)
-        if symbol and order_id and created and created > 0:
+        if created and created > 0:
             age_h = (now_ms - created) / 3_600_000.0
             if max_age_h <= age_h <= 240:
                 try:
                     trade.contract.cancel_order(symbol=symbol, order_id=order_id)
                     actions.append({"limit_expiry_cancel": symbol, "age_h": round(age_h, 2)})
+                    continue
                 except Exception:
                     pass
+
+        # 2) Price-distance "left behind" cancel: the market has run past the
+        # entry by more than limit_chase_pct in the un-fillable direction, so the
+        # pullback this limit was waiting for is gone. Free the slot + margin; the
+        # next scan re-places at the current VWAP level if the name still qualifies.
+        if chase_pct <= 0:
+            continue
+        entry_price = _find_number(record, ("price", "orderPrice", "limitPrice", "executePrice"))
+        if entry_price is None or entry_price <= 0:
+            continue
+        side = (_find_string(record, ("side",)) + " "
+                + _find_string(record, ("posSide", "holdSide", "tradeSide"))).lower()
+        try:
+            current = float(trade.helpers.contract_price(symbol))
+        except Exception:
+            continue
+        if not current or current <= 0:
+            continue
+        is_short = ("sell" in side) or ("short" in side)
+        gap = (entry_price - current) / entry_price if is_short else (current - entry_price) / entry_price
+        if gap > chase_pct:
+            try:
+                trade.contract.cancel_order(symbol=symbol, order_id=order_id)
+                actions.append({"stale_limit_cancel": symbol, "gap_pct": round(gap * 100, 2)})
+            except Exception:
+                pass
 
 
 def _exc_brief(exc: Exception) -> str:

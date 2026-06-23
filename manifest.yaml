@@ -83,6 +83,7 @@ strategy_config:
   circuit_stop_usdt: "40"
   time_stop_hours: "4"
   limit_expiry_hours: "4"
+  limit_chase_pct: "3.0"
   breakeven_trigger_usdt: "20"
 
 user_config_schema:
