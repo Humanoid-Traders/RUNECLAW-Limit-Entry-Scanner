@@ -84,6 +84,7 @@ strategy_config:
   time_stop_hours: "4"
   limit_expiry_hours: "4"
   limit_chase_pct: "3.0"
+  size_scope_mult: "1.5"
   breakeven_trigger_usdt: "20"
 
 user_config_schema:

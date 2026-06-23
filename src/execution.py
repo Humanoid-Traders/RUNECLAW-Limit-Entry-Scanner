@@ -134,37 +134,51 @@ def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-def _read_owned() -> set:
-    state = _read_state()
-    raw = state.get("owned_symbols") or []
-    return {str(s).upper() for s in raw if s}
-
-
-def _write_owned(owned: set) -> None:
-    state = _read_state()
-    state["owned_symbols"] = sorted(owned)
-    _write_state(state)
-
-
-def _pending_symbols() -> set:
-    """Symbols with a live RUNECLAW resting limit (or any pending order)."""
+def _pending_records() -> list:
+    """All live contract pending-order records (normalized dicts)."""
     try:
         pending = trade.contract.pending_orders()
     except Exception:
-        return set()
+        return []
     mapping = _to_mapping(pending) or {}
     rows = mapping.get("data") or mapping.get("list") or []
     if isinstance(rows, dict):
         rows = rows.get("list") or rows.get("entrustedList") or []
-    out = set()
+    out = []
     if isinstance(rows, list):
         for row in rows:
             rec = _to_mapping(row)
             if rec:
-                sym = _find_string(rec, ("symbol",))
-                if sym:
-                    out.add(sym.upper())
+                out.append(rec)
     return out
+
+
+def _record_notional(record: dict) -> Optional[float]:
+    """USDT notional (qty * price) of a live order or position record."""
+    qty = _find_number(record, _SIZE_KEYS + ("qty", "baseVolume"))
+    price = _find_number(record, ("price", "orderPrice", "limitPrice", "executePrice",
+                                  "openPriceAvg", "averageOpenPrice", "avgPrice", "markPrice"))
+    if qty is None or price is None or qty <= 0 or price <= 0:
+        return None
+    return qty * price
+
+
+def _runeclaw_sized(record: dict, cfg: dict) -> bool:
+    """Stateless ownership: recognise RUNECLAW's own orders/positions by size.
+
+    The runtime does not persist ``.state/`` between scheduled runs, so we cannot
+    remember which orders we placed. RUNECLAW risk-sizes every order to at most
+    ``margin_budget * leverage``; the user's manual trades have been ~10x larger.
+    We therefore manage only records whose notional is within our own envelope
+    (cap * size_scope_mult), which can never reach the user's bigger manual trades.
+    """
+    notional = _record_notional(record)
+    if notional is None or notional <= 0:
+        return False
+    leverage = max(int(cfg.get("leverage", 10)), 1)
+    budget = float(cfg.get("margin_budget", "100") or "100")
+    mult = float(cfg.get("size_scope_mult", "1.5"))
+    return notional <= budget * leverage * mult
 
 
 def manage_open_state(cfg: dict) -> dict:
@@ -201,69 +215,58 @@ def manage_open_state(cfg: dict) -> dict:
         state["last_equity"] = equity
         _write_state(state)
 
-    # --- live position snapshot (all account positions) ---
+    # --- live snapshot: positions + pending orders (the only source of truth;
+    # .state/ does not persist between scheduled runs) ---
     try:
         positions = trade.contract.current_position()
-        all_symbols = {s.upper() for s in (trade.helpers.contract_open_symbols(positions) or [])}
         records = trade.helpers.contract_position_records(positions) or []
     except Exception as exc:
         status["position_query_error"] = type(exc).__name__
-        all_symbols, records = set(), []
+        records = []
+    pending_records = _pending_records()
 
-    # --- ownership scope: only manage what RUNECLAW opened ---
-    # Reconcile owned set: drop symbols that have neither a live position nor a
-    # pending entry of ours; everything else stays.
-    pending = _pending_symbols()
-    owned = _read_owned()
-    owned = {s for s in owned if s in all_symbols or s in pending}
-    _write_owned(owned)
+    # --- STATELESS ownership: scope to RUNECLAW-sized live orders/positions ---
+    owned_position_records = [r for r in records if _runeclaw_sized(r, cfg)]
+    owned_pending_records = [r for r in pending_records if _runeclaw_sized(r, cfg)]
+    pos_symbols = {_find_string(r, ("symbol",)).upper()
+                   for r in owned_position_records if _find_string(r, ("symbol",))}
+    pend_symbols = {_find_string(r, ("symbol",)).upper()
+                    for r in owned_pending_records if _find_string(r, ("symbol",))}
+    owned = pos_symbols | pend_symbols
 
-    owned_open = owned & all_symbols
-    status["all_account_symbols"] = sorted(all_symbols)
+    status["all_account_symbols"] = sorted({_find_string(r, ("symbol",)).upper()
+                                            for r in records if _find_string(r, ("symbol",))})
     status["owned_symbols"] = sorted(owned)
-    # Count resting limits AND filled positions toward the concurrency/correlation
-    # caps. `owned` is reconciled above to RUNECLAW symbols that have either a live
-    # position or a pending entry -- i.e. total open commitments -- so "max 3"
-    # means 3 resting+filled together, not 3 fills on top of unbounded rests. (v0.1.12)
+    # Resting limits AND filled positions both count toward the concurrency cap,
+    # so "max N" means N total commitments (resting + filled). (v0.1.12/0.1.14)
     status["open_symbols"] = sorted(owned)
     status["open_count"] = len(owned)
-    status["filled_symbols"] = sorted(owned_open)
-
-    owned_records = [r for r in records if _find_string(r, ("symbol",)).upper() in owned]
+    status["filled_symbols"] = sorted(pos_symbols)
 
     if status["circuit"] == "tripped":
-        _flatten_owned(cfg, owned_records, owned, actions)
+        _flatten_owned(cfg, owned_position_records, owned_pending_records, actions)
         return status
 
-    _best_effort_position_controls(cfg, owned_records, status, actions)
-    _best_effort_limit_expiry(cfg, owned, actions)
+    _best_effort_position_controls(cfg, owned_position_records, status, actions)
+    _best_effort_limit_expiry(cfg, owned_pending_records, actions)
     return status
 
 
-def _flatten_owned(cfg: dict, owned_records: list, owned: set, actions: list) -> None:
-    """Circuit hard-stop: cancel ONLY RUNECLAW's resting orders + close ONLY its
-    positions. Never touches account positions opened outside the playbook."""
-    try:
-        pending = trade.contract.pending_orders()
-    except Exception:
-        pending = None
-    mapping = _to_mapping(pending) or {}
-    rows = mapping.get("data") or mapping.get("list") or []
-    if isinstance(rows, dict):
-        rows = rows.get("list") or rows.get("entrustedList") or []
-    if isinstance(rows, list):
-        for row in rows:
-            rec = _to_mapping(row) or {}
-            symbol = _find_string(rec, ("symbol",))
-            order_id = _find_string(rec, ("orderId", "order_id", "clientOid"))
-            if symbol and order_id and symbol.upper() in owned:
-                try:
-                    trade.contract.cancel_order(symbol=symbol, order_id=order_id)
-                    actions.append({"circuit_cancel": symbol})
-                except Exception:
-                    pass
+def _flatten_owned(cfg: dict, owned_position_records: list, owned_pending_records: list,
+                   actions: list) -> None:
+    """Circuit hard-stop: cancel ONLY RUNECLAW-sized resting orders + close ONLY
+    RUNECLAW-sized positions. Never touches the user's larger manual trades."""
+    for rec in owned_pending_records:
+        symbol = _find_string(rec, ("symbol",))
+        order_id = _find_string(rec, ("orderId", "order_id", "clientOid"))
+        if symbol and order_id:
+            try:
+                trade.contract.cancel_order(symbol=symbol, order_id=order_id)
+                actions.append({"circuit_cancel": symbol})
+            except Exception:
+                pass
 
-    for record in owned_records:
+    for record in owned_position_records:
         symbol = _find_string(record, ("symbol",))
         hold_side = _find_string(record, _HOLD_SIDE_KEYS)
         if symbol and hold_side:
@@ -330,33 +333,18 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
         pass
 
 
-def _best_effort_limit_expiry(cfg: dict, owned: set, actions: list) -> None:
-    """Cancel ONLY RUNECLAW's stale resting limits -- either past the time budget
-    (``limit_expiry_hours``) OR left behind when price ran more than
+def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: list) -> None:
+    """Cancel ONLY RUNECLAW-sized stale resting limits -- either past the time
+    budget (``limit_expiry_hours``) OR left behind when price ran more than
     ``limit_chase_pct`` past the entry in the direction the limit can never fill
     from (a short's sell-limit sits above market and dies if price collapses; a
-    long's buy-limit sits below market and dies if price runs up). Never cancels
-    non-RUNECLAW orders the user placed by hand. (v0.1.13)"""
+    long's buy-limit sits below market and dies if price runs up). Operates only on
+    the pre-scoped RUNECLAW-sized order records. (v0.1.13/0.1.14)"""
     max_age_h = float(cfg.get("limit_expiry_hours", "4"))
     chase_pct = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
     now_ms = _now_ms()
-    try:
-        pending = trade.contract.pending_orders()
-    except Exception:
-        return
-    mapping = _to_mapping(pending) or {}
-    rows = mapping.get("data") or mapping.get("list") or []
-    if isinstance(rows, dict):
-        rows = rows.get("list") or rows.get("entrustedList") or []
-    if not isinstance(rows, list):
-        return
-    for row in rows:
-        record = _to_mapping(row)
-        if not record:
-            continue
+    for record in owned_pending_records:
         symbol = _find_string(record, ("symbol",))
-        if symbol.upper() not in owned:
-            continue
         order_id = _find_string(record, ("orderId", "order_id", "clientOid"))
         if not symbol or not order_id:
             continue
@@ -504,16 +492,11 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
         "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price),
         "tp1": str(tpsl.tp_trigger_price), "sl": str(tpsl.sl_trigger_price),
     }
-    if placed:
-        # Tag the symbol as RUNECLAW-owned so management controls (time-stop,
-        # auto-BE, limit-expiry, circuit-flatten) only ever touch this position.
-        owned = _read_owned()
-        owned.add(symbol.upper())
-        _write_owned(owned)
-    else:
+    if not placed:
         # Surface the exchange's own rejection so a fully-sized, fully-guarded
         # order that never rests on the book stops being a silent no-op.
         out["reason"] = "exchange_reject:" + _result_reason(result)
+    # Ownership is derived live by size each cycle (stateless), so no tagging.
     return out
 
 
