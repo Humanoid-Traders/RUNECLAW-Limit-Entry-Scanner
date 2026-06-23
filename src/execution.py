@@ -392,11 +392,18 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
         return {"placed": False, "reason": "incomplete_plan"}
 
     # Duplicate guard: skip if already in a position or already resting an entry.
+    # Best-effort ONLY -- a parse/type error here must never block an entry. The
+    # v0.1.9 diagnostic proved find_contract_position raises TypeError on flat
+    # hedge-mode slots (size returned as the string "0"), and the old
+    # except-branch converted that into a hard skip that blocked 100% of orders.
+    # count_open_contract_positions normalizes those shapes; on any error we
+    # proceed and rely on max_concurrent + the exchange as backstops.
     try:
-        position = trade.helpers.find_contract_position(trade.contract.current_position(symbol=symbol), symbol)
-    except Exception as exc:
-        return {"placed": False, "reason": "position_check_error:" + type(exc).__name__}
-    if position is not None:
+        pos_result = trade.contract.current_position(symbol=symbol)
+        in_position = trade.helpers.count_open_contract_positions(pos_result, symbol=symbol) > 0
+    except Exception:
+        in_position = False
+    if in_position:
         return {"placed": False, "reason": "already_in_position"}
     try:
         existing = trade.helpers.select_contract_order(trade.contract.pending_orders(symbol=symbol), symbol=symbol)
