@@ -242,6 +242,10 @@ def manage_open_state(cfg: dict) -> dict:
     status["open_symbols"] = sorted(owned)
     status["open_count"] = len(owned)
     status["filled_symbols"] = sorted(pos_symbols)
+    # Diagnostic counts: total live pending vs the subset we recognise as ours.
+    status["pending_total"] = len(pending_records)
+    status["owned_pending"] = len(owned_pending_records)
+    status["ran"] = True
 
     if status["circuit"] == "tripped":
         _flatten_owned(cfg, owned_position_records, owned_pending_records, actions)

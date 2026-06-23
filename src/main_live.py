@@ -237,41 +237,38 @@ def run() -> None:
         execute_trade=_execute,
     )
 
-    decision_action = str(decision.get("action", "watch"))
-    attempted = bool(follow and decision_action in ("long", "short"))
+    # v0.1.15 MANAGEMENT DIAGNOSTIC. Two stale-limit-prune fixes failed, so stop
+    # guessing and surface every link of the management chain on a readable
+    # (actionable-primary) channel: did manage_open_state run at all (f =
+    # is_follow_trade), how many live pending orders it saw (pT) vs recognised as
+    # ours by size (oP / own), what it actually did (act), and any error (e) --
+    # plus the trade outcome (c/p/reason). Plain emit_signal on a sentinel symbol,
+    # so it trades nothing; it only reports. Decode:
+    #   f0...      -> management never ran (is_follow_trade gate) <- bug is the gate
+    #   f1-own0-pT>0 -> ran but recognised none of our orders <- size-scoping
+    #   f1-own>0-act0 with a stale order live -> chase-guard logic <- prune/extract
     called = bool(captured.get("called"))
     placed = captured.get("placed")
-    full_reason = str(captured.get("reason", "")) or ("not_attempted" if not attempted else "none")
-    reason = full_reason.replace(" ", "_")[:46]
-    emc = {"follow_trade": "F", "signal_only": "S"}.get(exec_mode, "?")
+    full_reason = str(captured.get("reason", "")) or "none"
     pcode = "1" if placed is True else ("0" if placed is False else "X")
-    diag = "DIAGm{m}c{c}p{p}-{r}".format(
-        m=emc, c=int(called), p=pcode, r=reason)[:63]
-
-    # Surface the placement outcome on a catalog-READABLE channel. The catalog
-    # drops a watch signal's symbol/payload (only the *actionable* primary
-    # signal's symbol is exposed), so when a follow-trade entry was attempted but
-    # did NOT rest (placed != True), re-emit the reason echoing the attempted
-    # side -- that makes the diagnosis the readable primary. This is a plain
-    # emit_signal (never the follow-trade callback) on a non-tradable sentinel
-    # symbol, so it can place or close nothing; it only carries the reason.
-    diag_metrics = {"diag": diag, "exec_mode": exec_mode, "follow": follow,
-                    "exec_called": called, "placed": placed, "reason": full_reason[:120]}
-    diag_meta = {"diag": diag, "reason_full": full_reason[:200]}
-    # Only REAL failures surface as the actionable (readable-primary) DIAG. By-design
-    # skips (already pending, cap reached, correlation budget, circuit, already in
-    # position, nothing attempted) are healthy and go out as a quiet watch so they
-    # don't masquerade as trade cards in the catalog. (v0.1.12)
-    _benign = ("entry_already_pending", "max_concurrent_reached", "correlation_budget",
-               "already_in_position", "circuit_paused", "circuit_tripped", "not_attempted")
-    real_failure = (attempted and placed is not True
-                    and not full_reason.startswith(_benign))
-    if real_failure:
-        runtime.emit_signal(action=decision_action, symbol=diag, confidence=0.111,
-                            metrics=diag_metrics, meta=diag_meta)
-    else:
-        runtime.emit_signal(action="watch", symbol=diag, confidence=0.5,
-                            metrics=diag_metrics, meta=diag_meta)
+    emc = {"follow_trade": "F", "signal_only": "S"}.get(exec_mode, "?")
+    own = mgmt.get("open_count", 0)
+    pT = mgmt.get("pending_total", "?")
+    oP = mgmt.get("owned_pending", "?")
+    acts = len(mgmt.get("actions", []) or [])
+    merr = str(mgmt.get("mgmt_error") or mgmt.get("position_query_error") or "ok")[:16]
+    rshort = full_reason.replace(" ", "_")[:16]
+    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}-{e}-{r}"
+           .format(f=int(follow), em=emc, own=own, pt=pT, op=oP, a=acts,
+                   c=int(called), p=pcode, e=merr, r=rshort))[:63]
+    runtime.emit_signal(
+        action="close", symbol=dbg, confidence=0.222,
+        metrics={"dbg": dbg, "follow": follow, "exec_mode": exec_mode,
+                 "open_count": own, "pending_total": pT, "owned_pending": oP,
+                 "mgmt_actions": mgmt.get("actions", []), "mgmt_error": merr,
+                 "called": called, "placed": placed, "reason": full_reason[:120]},
+        meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
+    )
 
 
 if __name__ == "__main__":
