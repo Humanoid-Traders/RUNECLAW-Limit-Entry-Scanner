@@ -258,7 +258,15 @@ def run() -> None:
     diag_metrics = {"diag": diag, "exec_mode": exec_mode, "follow": follow,
                     "exec_called": called, "placed": placed, "reason": full_reason[:120]}
     diag_meta = {"diag": diag, "reason_full": full_reason[:200]}
-    if attempted and placed is not True:
+    # Only REAL failures surface as the actionable (readable-primary) DIAG. By-design
+    # skips (already pending, cap reached, correlation budget, circuit, already in
+    # position, nothing attempted) are healthy and go out as a quiet watch so they
+    # don't masquerade as trade cards in the catalog. (v0.1.12)
+    _benign = ("entry_already_pending", "max_concurrent_reached", "correlation_budget",
+               "already_in_position", "circuit_paused", "circuit_tripped", "not_attempted")
+    real_failure = (attempted and placed is not True
+                    and not full_reason.startswith(_benign))
+    if real_failure:
         runtime.emit_signal(action=decision_action, symbol=diag, confidence=0.111,
                             metrics=diag_metrics, meta=diag_meta)
     else:

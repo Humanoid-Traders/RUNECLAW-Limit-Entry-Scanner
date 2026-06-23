@@ -221,8 +221,13 @@ def manage_open_state(cfg: dict) -> dict:
     owned_open = owned & all_symbols
     status["all_account_symbols"] = sorted(all_symbols)
     status["owned_symbols"] = sorted(owned)
-    status["open_symbols"] = sorted(owned_open)
-    status["open_count"] = len(owned_open)
+    # Count resting limits AND filled positions toward the concurrency/correlation
+    # caps. `owned` is reconciled above to RUNECLAW symbols that have either a live
+    # position or a pending entry -- i.e. total open commitments -- so "max 3"
+    # means 3 resting+filled together, not 3 fills on top of unbounded rests. (v0.1.12)
+    status["open_symbols"] = sorted(owned)
+    status["open_count"] = len(owned)
+    status["filled_symbols"] = sorted(owned_open)
 
     owned_records = [r for r in records if _find_string(r, ("symbol",)).upper() in owned]
 
