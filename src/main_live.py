@@ -237,27 +237,33 @@ def run() -> None:
         execute_trade=_execute,
     )
 
+    decision_action = str(decision.get("action", "watch"))
+    attempted = bool(follow and decision_action in ("long", "short"))
     called = bool(captured.get("called"))
     placed = captured.get("placed")
-    full_reason = str(captured.get("reason", "")) or "none"
-    reason = full_reason.replace(" ", "_")[:42]
+    full_reason = str(captured.get("reason", "")) or ("not_attempted" if not attempted else "none")
+    reason = full_reason.replace(" ", "_")[:46]
     emc = {"follow_trade": "F", "signal_only": "S"}.get(exec_mode, "?")
     pcode = "1" if placed is True else ("0" if placed is False else "X")
-    # Pack the whole follow-trade outcome into the only catalog-readable fields
-    # (symbol + confidence): mode / is_follow / callback-invoked / placed / reason.
-    # e.g. DIAG-mFf1c1pX-exchange_reject:40774:... -> follow mode, callback fired,
-    # placement returned None, blocked by the named exchange reject.
-    diag = "DIAG-m{m}f{f}c{c}p{p}-{r}".format(
-        m=emc, f=int(follow), c=int(called), p=pcode, r=reason)[:63]
-    conf = round(0.500 + 0.100 * int(follow) + 0.030 * int(called) + (0.003 if placed is True else 0.0), 3)
-    runtime.emit_signal(
-        action="watch",
-        symbol=diag,
-        confidence=conf,
-        metrics={"diag": diag, "exec_mode": exec_mode, "follow": follow,
-                 "exec_called": called, "placed": placed, "reason": full_reason[:120]},
-        meta={"diag": diag, "reason_full": full_reason[:200]},
-    )
+    diag = "DIAGm{m}c{c}p{p}-{r}".format(
+        m=emc, c=int(called), p=pcode, r=reason)[:63]
+
+    # Surface the placement outcome on a catalog-READABLE channel. The catalog
+    # drops a watch signal's symbol/payload (only the *actionable* primary
+    # signal's symbol is exposed), so when a follow-trade entry was attempted but
+    # did NOT rest (placed != True), re-emit the reason echoing the attempted
+    # side -- that makes the diagnosis the readable primary. This is a plain
+    # emit_signal (never the follow-trade callback) on a non-tradable sentinel
+    # symbol, so it can place or close nothing; it only carries the reason.
+    diag_metrics = {"diag": diag, "exec_mode": exec_mode, "follow": follow,
+                    "exec_called": called, "placed": placed, "reason": full_reason[:120]}
+    diag_meta = {"diag": diag, "reason_full": full_reason[:200]}
+    if attempted and placed is not True:
+        runtime.emit_signal(action=decision_action, symbol=diag, confidence=0.111,
+                            metrics=diag_metrics, meta=diag_meta)
+    else:
+        runtime.emit_signal(action="watch", symbol=diag, confidence=0.5,
+                            metrics=diag_metrics, meta=diag_meta)
 
 
 if __name__ == "__main__":
