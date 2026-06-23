@@ -258,9 +258,13 @@ def run() -> None:
     acts = len(mgmt.get("actions", []) or [])
     merr = str(mgmt.get("mgmt_error") or mgmt.get("position_query_error") or "ok")[:16]
     rshort = full_reason.replace(" ", "_")[:16]
-    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}-{e}-{r}"
+    pshape = str(mgmt.get("pending_shape", ""))[:18]
+    # When pT is still 0, show the pending-result shape (its top-level keys) so a
+    # remaining parse miss vs a genuinely empty unfiltered result is visible.
+    tail = ("shp." + pshape) if (str(pT) == "0" and pshape) else rshort
+    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}-{t}"
            .format(f=int(follow), em=emc, own=own, pt=pT, op=oP, a=acts,
-                   c=int(called), p=pcode, e=merr, r=rshort))[:63]
+                   c=int(called), p=pcode, t=tail))[:63]
     runtime.emit_signal(
         action="close", symbol=dbg, confidence=0.222,
         metrics={"dbg": dbg, "follow": follow, "exec_mode": exec_mode,

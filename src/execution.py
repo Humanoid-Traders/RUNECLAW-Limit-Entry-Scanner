@@ -134,23 +134,37 @@ def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-def _pending_records() -> list:
-    """All live contract pending-order records (normalized dicts)."""
-    try:
-        pending = trade.contract.pending_orders()
-    except Exception:
+def _extract_rows(value: Any, depth: int = 0) -> list:
+    """Recursively locate a list of record dicts (each carrying a 'symbol') inside
+    a varied SDK result envelope. The unfiltered pending_orders() result nests its
+    rows in a shape the old flat .get('data'/'list') parse missed -> the live DBG
+    showed manage_open_state seeing zero pending orders that actually existed (pT0).
+    This finds the row list wherever it is."""
+    if depth > 6:
         return []
-    mapping = _to_mapping(pending) or {}
-    rows = mapping.get("data") or mapping.get("list") or []
-    if isinstance(rows, dict):
-        rows = rows.get("list") or rows.get("entrustedList") or []
-    out = []
-    if isinstance(rows, list):
-        for row in rows:
-            rec = _to_mapping(row)
-            if rec:
-                out.append(rec)
-    return out
+    if isinstance(value, (list, tuple)):
+        recs = [m for m in (_to_mapping(x) for x in value) if m]
+        if recs and all("symbol" in r for r in recs):
+            return recs
+        out = []
+        for item in value:
+            out.extend(_extract_rows(item, depth + 1))
+        return out
+    mapping = _to_mapping(value)
+    if not mapping:
+        return []
+    for key in ("data", "list", "orders", "rows", "records", "result", "items",
+                "entrustedList", "entrusted_list", "orderList", "raw"):
+        if key in mapping:
+            found = _extract_rows(mapping[key], depth + 1)
+            if found:
+                return found
+    for nested in mapping.values():
+        if isinstance(nested, (list, dict)):
+            found = _extract_rows(nested, depth + 1)
+            if found:
+                return found
+    return []
 
 
 def _record_notional(record: dict) -> Optional[float]:
@@ -223,7 +237,15 @@ def manage_open_state(cfg: dict) -> dict:
     except Exception as exc:
         status["position_query_error"] = type(exc).__name__
         records = []
-    pending_records = _pending_records()
+    try:
+        pending_raw = trade.contract.pending_orders()
+    except Exception as exc:
+        pending_raw = None
+        status["pending_error"] = type(exc).__name__
+    pending_records = _extract_rows(pending_raw) if pending_raw is not None else []
+    _pm = _to_mapping(pending_raw) or {}
+    status["pending_shape"] = (";".join(list(_pm.keys())[:5])[:28] if _pm
+                               else ("obj" if pending_raw is not None else "none"))
 
     # --- STATELESS ownership: scope to RUNECLAW-sized live orders/positions ---
     owned_position_records = [r for r in records if _runeclaw_sized(r, cfg)]
