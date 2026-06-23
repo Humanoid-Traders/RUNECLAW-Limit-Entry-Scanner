@@ -359,6 +359,13 @@ def _best_effort_limit_expiry(cfg: dict, owned: set, actions: list) -> None:
                     pass
 
 
+def _exc_brief(exc: Exception) -> str:
+    """Compact exception *message* (not just the class name) so a real SDK or
+    exchange validation cause surfaces in the diagnostic instead of a bare type."""
+    msg = str(exc).strip().replace("\n", " ").replace(",", ";")
+    return (msg or type(exc).__name__)[:80]
+
+
 def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     plan = decision.get("plan") or {}
     symbol = str(decision.get("symbol", ""))
@@ -417,6 +424,8 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     except Exception:
         step = None
     entry_price = _align(entry, step)
+    tp1_price = _align(tp1, step)
+    sl_price_aligned = _align(sl_price, step)
 
     try:
         qty_plan = trade.helpers.compute_qty(
@@ -424,16 +433,18 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
             leverage=leverage, price=str(entry_price),
         )
     except Exception as exc:
-        return {"placed": False, "reason": "compute_qty_error:" + type(exc).__name__}
+        return {"placed": False, "reason": "compute_qty_error:" + _exc_brief(exc)}
 
+    # Pass tick-aligned TP/SL trigger prices, and surface the real validation
+    # text (not just the exception class) so any reject reason is actionable.
     try:
         tpsl = trade.helpers.resolve_contract_tpsl(
             symbol=symbol, side=side, leverage=leverage,
-            tp_trigger_price=str(tp1), sl_trigger_price=str(sl_price),
+            tp_trigger_price=tp1_price, sl_trigger_price=sl_price_aligned,
             reference_price=str(entry_price),
         )
     except Exception as exc:
-        return {"placed": False, "reason": "tpsl_error:" + type(exc).__name__}
+        return {"placed": False, "reason": "tpsl_error:" + _exc_brief(exc)}
 
     opener = trade.contract.open_short_limit if side == "short" else trade.contract.open_long_limit
     try:
@@ -442,7 +453,7 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
             tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
         )
     except Exception as exc:
-        return {"placed": False, "reason": "open_raise:" + type(exc).__name__,
+        return {"placed": False, "reason": "open_raise:" + _exc_brief(exc),
                 "symbol": symbol, "side": side,
                 "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price)}
 
