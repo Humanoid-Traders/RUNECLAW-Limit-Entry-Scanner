@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Runtime state (not persisted between scheduled runs; never commit)
+.state/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# Tooling / OS
+.idea/
+.vscode/
+.DS_Store
+*.log
+*.tmp
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
