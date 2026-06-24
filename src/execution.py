@@ -26,7 +26,14 @@ from getagent import trade
 _STATE_DIR = Path("/workspace/.state")
 _STATE_FILE = _STATE_DIR / "runeclaw_scanner.json"
 
-_OPEN_TIME_KEYS = ("cTime", "ctime", "openTime", "open_time", "createTime", "uTime")
+# SDK serialises order/position records to snake_case (to_dict/model_dump), so the
+# raw Bitget camelCase cTime/createTime never matched here -- a real ETH limit sat
+# ~8h past its 4h limit_expiry because create_time was absent, so age was unknown
+# and the time-expiry silently no-op'd. The position time-stop reads the same list,
+# so it was latently broken too. Carry both cases, like every other key list. (v0.1.18)
+_OPEN_TIME_KEYS = ("cTime", "ctime", "c_time", "create_time", "created_time", "createTime",
+                   "createdTime", "openTime", "open_time", "uTime", "u_time", "update_time",
+                   "updateTime")
 _ENTRY_PRICE_KEYS = ("openPriceAvg", "averageOpenPrice", "average_open_price",
                      "avgPrice", "openAvgPrice", "entryPrice", "open_price")
 _UPNL_KEYS = ("unrealizedPL", "unrealized_pnl", "unrealizedPnl", "upl", "uplValue")
