@@ -19,7 +19,7 @@
   - [ ] Live trading verification instructions
 - [ ] **Code Structure:**
   - [ ] `/signal/confluence.py` — LLM-driven voting (5 voters, 3/5 gate)
-  - [ ] `/executor/fsm.py` — Finite state machine (IDLE → ENTRY → LONG → REDUCE → CLOSED)
+  - [ ] `/src/execution.py` — Finite state machine (IDLE → ENTRY → LONG → REDUCE → CLOSED)
   - [ ] `/risk_engine/checks.py` — Pre-entry capital, post-fill P&L, monotonic watchdog
   - [ ] `/backtest/runner.py` — Reproducible backtest harness
   - [ ] `/tests/` — 368 test suite (0 failures)
@@ -194,7 +194,7 @@ git tag -v v3.3.0
 # Output should show signed commit
 
 # Verify artifact hashes
-sha256sum backtest/config.json signal/confluence.py executor/fsm.py
+sha256sum backtest/config.json signal/confluence.py src/execution.py
 # Compare against /audit/SHA256_MANIFEST.txt
 
 # Push to public repo
