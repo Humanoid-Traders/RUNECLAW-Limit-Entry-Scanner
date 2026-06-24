@@ -231,4 +231,4 @@ When Bug #1 proof lands: add the `limit_expiry_cancel` row to `logs/TRADING_LOG_
 
 ---
 
-**Commit:** `cd7f411` | **Tag:** `v0.1.18-audit` | **Repo:** [Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner](https://github.com/Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner)
+**Tag:** `v0.1.18-audit` | **Repo:** [Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner](https://github.com/Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner) | **Commit SHA:** see `git log` (volatile across re-sign)
