@@ -294,6 +294,7 @@ def run() -> None:
                  "open_count": own, "pending_total": pT, "owned_pending": oP,
                  "mgmt_actions": mgmt.get("actions", []), "mgmt_error": merr,
                  "pending_reason": mgmt.get("pending_reason", ""),
+                 "state_runs": mgmt.get("state_runs"),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
     )

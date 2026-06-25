@@ -2,7 +2,13 @@
 
 **Date:** 2026-06-25
 **Scope:** Static audit of `src/` (execution, scoring, risk, features, main_live) + `manifest.yaml`, cross-referenced against the live SITREP/DBG signals and the existing `audit/SECURITY_AUDIT_FINAL.md`.
-**Method:** Source-only. The `getagent` SDK is not vendored and there are no tests in the repo, so SDK-internal behavior (envelope shapes, helper semantics) is reasoned about, not executed. Findings are tagged **VERIFIED** (provable from source in this repo) or **SUSPECTED** (depends on runtime/SDK behavior I cannot execute here).
+**Method:** Source-only, then cross-checked against the installed GetAgent SDK reference (`getagent` 0.1.1: `sdk/trade/contract.md`, `sdk/trade/helpers.md`, `sandbox-runtime.md`). Findings are tagged **VERIFIED** (provable from source in this repo), **SDK-CONFIRMED** (resolved against the SDK reference), or **SUSPECTED** (still depends on a live runtime fact).
+
+### SDK cross-check — what the reference resolved
+
+- **`.state/` IS the supported persisted path** (`sandbox-runtime.md`): *"Treat `.state/` as the only supported persisted path across runs... the runner **may optionally** hydrate and sync `.state/`."* The code's repeated claim that *"`.state/` does not persist between scheduled runs"* — the stated justification for the v0.1.14 ownership-by-size rewrite — is **false as written**. `.state/` is exactly where cross-run state belongs. Persistence is gated on the runner hydrating it ("may optionally"), so it must be *verified*, not assumed — see the probe added for #1. This reframes #1/#3/#4 (below).
+- **There is no bulk pending-order extractor in the SDK.** Positions have `trade.helpers.contract_position_records(...)`; pending orders have only `select_contract_order(...)` (picks one, raises on multiple) and `find_contract_order(result, order_id)` (exact id). So the hand-rolled `_extract_rows` exists because the SDK offers no list-extractor for orders — it cannot simply be "replaced with the SDK helper." The right fix for #2 is a success-gate (done) plus, if the live signal shows a parse miss, a per-symbol `find_contract_order` lookup keyed off the order ids the manager already knows.
+- **The envelope `{code, message, data, trace_id}` is the trade-proxy wrapper** (`getagent.trade` calls go through `GETAGENT_TRADE_PROXY_BASE_URL`), not Bitget's native `{code, msg, data, requestTime}`. `trade.is_success(...)` is the sanctioned success check on it — now applied in `manage_open_state` (#2).
 
 > This audit is deliberately adversarial. The existing `SECURITY_AUDIT_FINAL.md` marks most controls "PASS / code-enforced"; several of those claims do not survive a close read of the code. The point of this pass is to surface what is actually load-bearing vs. advertised.
 
@@ -12,8 +18,8 @@
 
 | # | Finding | Severity | Tag |
 |---|---------|----------|-----|
-| 1 | Circuit breaker is non-functional under the project's own stated `.state/` assumption | **HIGH** | VERIFIED |
-| 2 | Management layer silently treats an error/unrecognized `pending_orders()` envelope as "0 orders" — the live `pT0` blindness; limit-expiry & circuit-cancel can never fire | **HIGH** | VERIFIED (code path) / SUSPECTED (root-cause shape) |
+| 1 | Circuit breaker and ownership layer hold contradictory `.state/` assumptions; the SDK says `.state/` *is* the persisted path, so the ownership rewrite rests on a false premise and the breaker is valid only if the runner hydrates state (probe added) | **HIGH** | SDK-CONFIRMED + probe pending |
+| 2 | Management layer silently treats an error/unrecognized `pending_orders()` envelope as "0 orders" — the live `pT0` blindness; limit-expiry & circuit-cancel can never fire (success-gate now landed) | **HIGH** | VERIFIED (code path) / SUSPECTED (root-cause shape) |
 | 3 | Circuit breaker measures *whole-account* equity, contradicting the size-scoping ownership model | **MED-HIGH** | VERIFIED |
 | 4 | Size-based ownership will adopt & force-close a user's manual trade under the notional cap | **MED-HIGH** | VERIFIED |
 | 5 | `max_concurrent: 3` is unreachable — correlation budget caps real concurrency at 2 (1 with BTC/ETH) | **MEDIUM** | VERIFIED |
@@ -25,7 +31,9 @@
 
 ---
 
-## 1. Circuit breaker is non-functional under the project's own `.state/` assumption — **HIGH**
+## 1. Contradictory `.state/` assumptions; the ownership rewrite rests on a false premise — **HIGH**
+
+> **SDK update:** `sandbox-runtime.md` states *"Treat `.state/` as the only supported persisted path across runs"* and *"the runner **may optionally** hydrate and sync `.state/`."* So `.state/` **is** the sanctioned cross-run store. That changes the conclusion: the circuit breaker's use of `.state/` is *correct by design*; what's wrong is the **ownership layer's claim that `.state/` doesn't persist**, which is the stated reason it abandoned state-tagging for the riskier size heuristic (#4). The one remaining unknown is whether *this playbook's runner actually hydrates* `.state/` ("may optionally"). A monotonic `state_runs` counter has been added to `manage_open_state` and surfaced on the DBG channel to settle it: if `state_runs` climbs across cycles, state persists (breaker valid, size heuristic unjustified → revert to tagging); if it stays at `1`, state is ephemeral for this runner (breaker is dead, as below).
 
 The README and risk table advertise a code-enforced daily-loss circuit breaker (`circuit_pause_usdt: 30`, `circuit_stop_usdt: 40`). Its implementation depends entirely on persisting `day_start_equity` across scheduled runs:
 
@@ -86,8 +94,9 @@ Two structural problems:
    - the order rows are nested under a key not in the search list, or each row keys its symbol as something other than the literal `"symbol"`, so the `all("symbol" in r for r in recs)` gate (line 154) rejects them.
 
 **Recommended fix (high value, low risk):**
-   - Gate on success first: `if not trade.is_success(pending_raw): status["pending_error"] = _result_reason(pending_raw)` and surface it — never collapse an error into `pT0`.
-   - Stop hand-rolling the parse. The write path already trusts an SDK helper — `trade.helpers.select_contract_order(trade.contract.pending_orders(symbol=...))` (line 497) — and positions use `trade.helpers.contract_position_records(...)` (line 264). Use the SDK's own pending-order records helper in the manager too, so read and write paths parse identically. The bespoke recursive `_extract_rows` is the root cause of every "parse miss" in the changelog (v0.1.4, v0.1.16) and will keep regressing.
+   - **Gate on success first (LANDED):** `manage_open_state` now probes `trade.is_success(pending_raw)` and, on failure, records `status["pending_reason"] = _result_reason(...)`. The DBG tail shows `perr.<code:msg>` (query failed) vs `shp.<keys>` (query succeeded, parse missed) when `pT==0`. The next live cycle decides the branch below.
+   - **If `perr.…`** (error path): the proxy is rejecting the unfiltered `pending_orders()` call. Add a bounded retry and, if still failing, treat the cycle as "unknown — do not act" rather than "empty".
+   - **If `shp.…` with no `perr`** (parse path): the SDK has **no bulk order-records helper** (confirmed: only `select_contract_order`, which raises on multiple, and `find_contract_order(result, order_id)` by exact id). So `_extract_rows` cannot just be swapped out. Harden it (see #7) and/or drive ownership off order ids the manager already placed via `find_contract_order`. The bespoke recursive parse is the root cause of every "parse miss" in the changelog (v0.1.4, v0.1.16) and will keep regressing until it is replaced by an id-keyed lookup.
 
 ---
 
