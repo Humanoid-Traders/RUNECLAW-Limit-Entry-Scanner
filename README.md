@@ -1,6 +1,6 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.18
+**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.20
 
 > RUNECLAW is a two-sided perpetual futures scanner that gates entries behind a market-regime check, ranks a 66-symbol universe by a blended score, and places resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it.
 
@@ -232,3 +232,25 @@ When Bug #1 proof lands: add the `limit_expiry_cancel` row to `logs/TRADING_LOG_
 ---
 
 **Tag:** `v0.1.18-audit` | **Repo:** [Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner](https://github.com/Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner) | **Commit SHA:** see `git log` (volatile across re-sign)
+
+
+---
+
+## 中文说明 (Plain-language summary)
+
+### 策略 (Strategy)
+RUNECLAW 是一个双向永续合约扫描策略。开仓前先判断市场领头币（默认 BTC）的趋势状态：当趋势偏弱或混乱时不开任何仓位，优先保住本金；趋势向好时做多，明显走弱时做空。在配置的币种范围内，用相对强弱、VWAP 位置、日内区间位置、订单簿买卖盘比例和成交流动性综合打分，只有分数达到 min_score（默认 70）的标的才会成为候选。
+
+### 开仓 (Opening)
+入场使用限价挂单，挂在 VWAP 下方/上方 atr_limit_mult × ATR 的位置，等待价格回调成交，不追价。每笔订单按照每笔最大亏损（max_loss_usdt，默认 15 USDT）与止损距离反推仓位大小，并受最大并发持仓数（max_concurrent）和相关性预算限制。
+
+### 平仓 (Closing)
+退出分层、风险优先：在市场近期防守位之外设置保护性止损；分批止盈（tp1/tp2）；剩余仓位用 ATR 跟踪止损；价格朝有利方向运行足够后将止损移至保本。组合层面还会过期撤销长时间未成交的挂单（limit_expiry_hours）、执行日内时间止损（time_stop_hours），并在当日累计亏损触发熔断时暂停开新仓。
+
+### 风险 (Risk)
+- 每笔交易最大亏损由 max_loss_usdt 控制（默认 15 USDT），仓位由止损距离反推。
+- 杠杆可调（默认 10x，最高 25x）；更高杠杆会同时放大盈利与回撤。
+- 当日亏损达到 circuit_pause_usdt 暂停、circuit_stop_usdt 停止开新仓（熔断）。
+- 限制最大并发持仓与相关性敞口。
+- 在领头币无方向震荡、市场宽度弱或快速行情击穿止损时表现较差，按设计可能长时间空仓。
+- 过往表现不代表未来收益；实盘有手续费与滑点，请按可承受回撤规模建仓。
