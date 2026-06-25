@@ -270,6 +270,18 @@ def manage_open_state(cfg: dict) -> dict:
     except Exception as exc:
         pending_raw = None
         status["pending_error"] = type(exc).__name__
+    # A non-raising error envelope (live shape: {code, message, data, trace_id})
+    # must NOT be read as "no pending orders" -- that silently blinds limit-expiry
+    # and the circuit cancel loop (the live pT0). Probe success and surface the
+    # exchange code:msg, so a failed query is distinguishable from an empty book
+    # and the next cycle's DBG says whether pT0 is an error or a parse miss.
+    if pending_raw is not None:
+        try:
+            pending_ok = bool(trade.is_success(pending_raw))
+        except Exception:
+            pending_ok = True
+        if not pending_ok:
+            status["pending_reason"] = _result_reason(pending_raw)
     pending_records = _extract_rows(pending_raw) if pending_raw is not None else []
     status["pending_shape"] = _shape(pending_raw)[:40] if pending_raw is not None else "none"
 
