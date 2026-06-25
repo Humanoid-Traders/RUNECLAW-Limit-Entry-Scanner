@@ -1,6 +1,6 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.20
+**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.21
 
 > RUNECLAW is a two-sided perpetual futures scanner that gates entries behind a market-regime check, ranks a 66-symbol universe by a blended score, and places resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it.
 
@@ -233,6 +233,56 @@ When Bug #1 proof lands: add the `limit_expiry_cancel` row to `logs/TRADING_LOG_
 
 **Tag:** `v0.1.18-audit` | **Repo:** [Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner](https://github.com/Humanoid-Traders/RUNECLAW-Limit-Entry-Scanner) | **Commit SHA:** see `git log` (volatile across re-sign)
 
+
+---
+
+## Engine Architecture
+
+RUNECLAW is built as six cooperating engines. Each runs once per 15-minute cycle; the orchestrator wires them together and emits one diagnostic line at the end.
+
+### 1. Feature Engine — `features.py`
+The data layer. One `getagent.data.crypto.futures.ticker` call per symbol returns the 24h snapshot every downstream dimension consumes: `last`, `vwap`, `high`, `low`, 24h `change_percent`, `quote_volume`, and best-level `bid_volume` / `ask_volume`. A second `taker_volume` call on the gate asset supplies the optional taker buy/sell ratio. Responses arrive as SDK `OBBject`s and are normalized through the sanctioned `data.to_records(...)` converter; any symbol missing core price fields is marked `ok=False` and scored 0 — never guessed or back-filled.
+
+### 2. Regime Engine — the BTC gate — `scoring.py: regime`
+Capital preservation runs first. Before any coin is judged, the leader (BTC by default) resolves a **regime** from three independent signals, each worth one point: daily change sign (up/down), side of VWAP (above/below), and taker dominance (buy- vs sell-initiated flow). `long_score` and `short_score` are tallied 0–3:
+
+- **≥ 2 → trade that side at full size** (`size_factor 1.0`)
+- **== 1 → reduced size** (`size_factor 0.5`)
+- **otherwise `none`** — the scanner still reports scores but **opens nothing**
+
+Shorts are only taken when `allow_short` is enabled. This is the gate that makes RUNECLAW stand aside in directionless chop instead of forcing trades.
+
+### 3. Scoring Engine — `scoring.py: score_universe`
+Every symbol is scored **0–100 for the active direction**, fully mirrored for shorts, across five weighted dimensions:
+
+| Dimension | Weight | Long rewards… | Computed from |
+|---|---|---|---|
+| Momentum | 0–25 | relative strength vs BTC (cross-sectional min-max) | `change_pct − btc_change` |
+| VWAP position | 0–20 | trading above VWAP (±0.1% deadband) | `last` vs `vwap` |
+| Range position | 0–20 | upper third of the 24h range | `(last−low)/(high−low)` |
+| Order book | 0–20 | bid-heavy resting book (tiered) | `bid_volume / ask_volume` |
+| Volume | 0–15 | deeper traded liquidity (cross-sectional) | `quote_volume` |
+
+Three **hard skips** remove a name from candidacy regardless of score: **overextension** beyond `max_vwap_ext_pct` from VWAP on the entry side (a pullback limit structurally cannot fill a runaway breakout), an **opposing wall** (`bidask_wall_ratio`), and **thin volume** (`< min_volume_usdt`). Only names clearing `min_score` become candidates.
+
+### 4. Risk Engine — `risk.py: build_plan`
+Sizing is solved **backward from a fixed dollar risk**, never forward from a notional:
+
+- **Entry** — a pullback limit at `VWAP ∓ atr_limit_mult × ATR` (ATR proxied as `(high − low) / 2.5`).
+- **Stop** — beyond the 24h low (long) / high (short), floored at a per-tier minimum (`BTC/ETH 1.5%`, `SOL/BNB 1.2%`, alts `2.5%`) so market noise cannot place an absurdly tight stop.
+- **Targets** — a two-stage take-profit ladder (`tp1 3.5%`, `tp2 7%`), an ATR trailing distance, and a breakeven trigger (`2%`).
+- **Size** — `notional = max_loss_usdt / sl_pct × size_factor`; `margin = notional / leverage`; then **capped by `margin_budget`**. The per-trade loss at the stop is the control variable; everything else is derived from it.
+
+### 5. Execution & Management Engine — `execution.py`
+The stateful layer that owns the live book:
+
+- **Ownership** — stateless and size-scoped: it manages only records whose notional fits RUNECLAW's own envelope (`margin_budget × leverage × size_scope_mult`), so it never adopts a larger manual trade.
+- **Circuit breaker** — tracks day-start account equity in `.state/`; pauses new entries at `circuit_pause_usdt`, halts at `circuit_stop_usdt`.
+- **Limit lifecycle** — expires resting orders past `limit_expiry_hours`, and chase-cancels a limit the market has run more than `limit_chase_pct` past (a stale limit that will never fill).
+- **Position management** — intraday `time_stop_hours`, breakeven lift once a trade moves enough in favor, and the staged take-profit ladder.
+
+### 6. Orchestrator & Diagnostics — `main_live.py`
+Wires the cycle: features → regime gate → score → plan → `open_if_allowed`, then `manage_open_state`, then emits the compact **DBG** line — `own / pT / oP / act / c / p` plus a tail that is either a real fetch error (`perr.<code:msg>`) or the decision reason (`none`, `correlation_budget`, `entry_already_pending`, …), untruncated as of v0.1.20. It is the single readable line that reports what every engine did this cycle.
 
 ---
 
