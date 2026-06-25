@@ -12,6 +12,16 @@
 
 > This audit is deliberately adversarial. The existing `SECURITY_AUDIT_FINAL.md` marks most controls "PASS / code-enforced"; several of those claims do not survive a close read of the code. The point of this pass is to surface what is actually load-bearing vs. advertised.
 
+### Live verification (2026-06-25, instance `d53e9812`, v0.1.19, `ef1ab1d2`)
+
+Confirmed against live DBG signals and a read-only `my-playbooks` API pull:
+
+- **#2 read path works in practice.** Cycles at 04:03 and 04:18 UTC printed `own1-pT1-oP1-...-none`: the manager placed an ETH short limit (03:48, `c1p1`), then on the next cycles **parsed the trade-proxy pending envelope, found the resting order, and claimed it by size**. So the worst-case "parse blindness" did **not** occur here; `_extract_rows` handled the live `{code,message,data,trace_id}` shape. The `shp.code;message;data;trace_id` tail seen earlier was the **empty-book diagnostic** (`pT==0`), *not* a fault or crash — the cycle completed normally each time. #2's success-gate remains correct defensive hardening, but its severity in practice is lower than first feared.
+- **Instance mode is not taken from the manifest default.** `my-playbooks` shows `execution_mode: follow_trade` with `config_overrides: {}`, while the repo manifest declares `signal_only`. The instance's execution mode is set at subscribe/enable time, independent of the manifest default — so a republish does not silently flip the live mode from the manifest field.
+- **Live config = published manifest.** `config_overrides: {}` means the live `strategy_config` is exactly the published v0.1.19 manifest's — relevant to #5/#6/#8 (the true `max_concurrent`/`min_score`/`limit_expiry_hours` are whatever v0.1.19's manifest holds, not necessarily this repo's).
+
+**Still open — the expiry chain.** The placed order is the real test of time-expiry: it only crosses `limit_expiry_hours` (4h) at **~07:48 UTC**. If a >4h, still-resting order then shows `act0` (no `limit_expiry_cancel`), the residual risk is confirmed: the order record's create-time not matching any `_OPEN_TIME_KEYS` entry, so `age` resolves to `None` and time-expiry no-ops. The right next step in that case is a **key-dumping diagnostic** on owned pending records (surface the record's actual keys) to identify the proxy's timestamp field *before* writing the `_OPEN_TIME_KEYS` fix — guessing the key blind is what produced the v0.1.13→v0.1.18 churn.
+
 ---
 
 ## Severity summary
