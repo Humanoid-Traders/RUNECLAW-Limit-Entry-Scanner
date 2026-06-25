@@ -29,6 +29,18 @@ long_description: |
   applies an intraday time-stop, and halts new entries when the day's running loss
   breaches a circuit breaker.
 
+  Under the hood RUNECLAW is six cooperating engines, run once per cycle: a
+  feature engine that pulls one 24h ticker snapshot per symbol; a regime engine
+  that gates direction off the leader's daily change, VWAP side, and taker flow;
+  a scoring engine that blends relative momentum, VWAP location, range position,
+  order-book balance, and traded liquidity into a 0-100 directional score; a risk
+  engine that solves position size backward from a fixed per-trade dollar loss and
+  caps it by the margin budget; an execution engine that places the pullback limit
+  and owns the live book (size-scoped ownership, stale-limit expiry, chase-cancel,
+  intraday time-stop, and the daily circuit breaker); and an orchestrator that
+  wires the cycle and emits one compact, readable diagnostic line summarizing what
+  every engine did. The README documents each engine and its parameters in full.
+
   Subscribers can tune the universe, leverage, the margin budget that anchors
   sizing and the displayed return, the per-trade dollar risk cap, the number of
   names scanned per pass, the score required to act, whether shorting is enabled,
