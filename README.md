@@ -1,6 +1,6 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.20
+**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.21
 
 > RUNECLAW is a two-sided perpetual futures scanner that gates entries behind a market-regime check, ranks a 66-symbol universe by a blended score, and places resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it.
 
