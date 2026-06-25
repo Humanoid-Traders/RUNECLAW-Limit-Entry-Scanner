@@ -79,6 +79,15 @@ class SymbolFeatures:
     bid_volume: Optional[float] = None
     ask_volume: Optional[float] = None
     note: str = ""
+    # v0.2.0 kline engine (populated by enrich(); None/neutral until then)
+    atr: Optional[float] = None
+    trend_dir: str = "neutral"      # "long" | "short" | "neutral"
+    trend_strength: float = 0.0     # [0, 1]
+    kline_ok: bool = False
+    # v0.2.0 funding engine
+    funding_now: Optional[float] = None
+    funding_avg: Optional[float] = None
+    funding_ok: bool = False
 
 
 def fetch_symbol(symbol: str, exchange: str = "bitget") -> SymbolFeatures:
@@ -127,3 +136,123 @@ def taker_buy_ratio(symbol: str, exchange: str = "bitget") -> Optional[float]:
     if buy_vol is not None and sell_vol not in (None, 0):
         return buy_vol / sell_vol
     return None
+
+
+# --- v0.2.0 kline + funding engines -----------------------------------------
+
+_BAR_H = ("high", "h", "high_price")
+_BAR_L = ("low", "l", "low_price")
+_BAR_C = ("close", "c", "close_price")
+_BAR_T = ("timestamp", "t", "time", "date", "ts", "start_time")
+
+
+def _bar_f(bar: dict, keys: tuple) -> Optional[float]:
+    for k in keys:
+        if k in bar:
+            v = _f(bar.get(k))
+            if v is not None:
+                return v
+    return None
+
+
+def fetch_klines(symbol: str, interval: str = "1h", limit: int = 50,
+                 exchange: str = "bitget") -> list:
+    """OHLC bars (oldest->newest) for ``symbol``; ``[]`` on any failure."""
+    try:
+        obb = data.crypto.futures.kline(symbol=symbol, interval=interval,
+                                        limit=limit, exchange=exchange,
+                                        data_type="ohlc")
+    except Exception:
+        return []
+    bars = [r for r in _to_records(obb) if isinstance(r, dict)]
+    if bars and _bar_f(bars[0], _BAR_T) is not None:
+        bars.sort(key=lambda b: _bar_f(b, _BAR_T) or 0.0)
+    return bars
+
+
+def _wilder_atr(bars: list, period: int) -> Optional[float]:
+    """Wilder-smoothed ATR over ``period`` bars; None if too few clean bars."""
+    highs, lows, closes = [], [], []
+    for b in bars:
+        h, l, c = _bar_f(b, _BAR_H), _bar_f(b, _BAR_L), _bar_f(b, _BAR_C)
+        if h is None or l is None or c is None:
+            continue
+        highs.append(h); lows.append(l); closes.append(c)
+    n = len(closes)
+    if n < period + 1:
+        return None
+    trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]),
+               abs(lows[i] - closes[i - 1])) for i in range(1, n)]
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return atr if atr > 0 else None
+
+
+def _ema_trend(bars: list, lookback: int, norm: float) -> tuple:
+    """(trend_dir, trend_strength[0,1]) from last close vs EMA(lookback)."""
+    closes = [c for c in (_bar_f(b, _BAR_C) for b in bars) if c is not None]
+    if len(closes) < lookback + 1:
+        return ("neutral", 0.0)
+    k = 2.0 / (lookback + 1.0)
+    ema = closes[0]
+    for c in closes[1:]:
+        ema = c * k + ema * (1.0 - k)
+    last = closes[-1]
+    if ema <= 0:
+        return ("neutral", 0.0)
+    gap = (last - ema) / ema
+    strength = min(abs(gap) / norm, 1.0) if norm > 0 else 0.0
+    if gap > 0:
+        return ("long", strength)
+    if gap < 0:
+        return ("short", strength)
+    return ("neutral", 0.0)
+
+
+def fetch_funding(symbol: str, interval: str = "1h", limit: int = 8,
+                  exchange: str = "bitget") -> tuple:
+    """(funding_now, funding_avg, ok): latest fr_close + trailing window mean."""
+    try:
+        obb = data.crypto.futures.funding_rate(symbol=symbol, interval=interval,
+                                               limit=limit, exchange=exchange)
+    except Exception:
+        return (None, None, False)
+    rows = [b for b in _to_records(obb) if isinstance(b, dict)]
+    rates = [r for r in (_f(b.get("fr_close")) for b in rows) if r is not None]
+    if not rates:  # some shapes expose a flat 'funding_rate'
+        rates = [r for r in (_f(b.get("funding_rate")) for b in rows) if r is not None]
+    if not rates:
+        return (None, None, False)
+    return (rates[-1], sum(rates) / len(rates), True)
+
+
+def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> SymbolFeatures:
+    """Pass-2: populate kline (ATR + trend) and funding fields on ``feats``.
+
+    Mutates and returns ``feats``. Any failure degrades gracefully -- kline_ok /
+    funding_ok stay False, leaving the ATR proxy and neutral trend in effect."""
+    if not feats.ok:
+        return feats
+    k_int = str(cfg.get("kline_interval", "1h"))
+    atr_period = int(cfg.get("atr_period", 14))
+    t_int = str(cfg.get("trend_interval", "4h"))
+    t_look = int(cfg.get("trend_lookback", 12))
+    t_norm = float(cfg.get("trend_norm", "0.05"))
+
+    bars = fetch_klines(feats.symbol, interval=k_int,
+                        limit=max(atr_period + 5, 30), exchange=exchange)
+    atr = _wilder_atr(bars, atr_period) if bars else None
+    if atr is not None:
+        feats.atr = atr
+        feats.kline_ok = True
+
+    t_bars = bars if t_int == k_int else fetch_klines(
+        feats.symbol, interval=t_int, limit=max(t_look + 5, 20), exchange=exchange)
+    feats.trend_dir, feats.trend_strength = _ema_trend(t_bars, t_look, t_norm)
+
+    f_int = str(cfg.get("funding_interval", "1h"))
+    f_win = int(cfg.get("funding_window", 8))
+    feats.funding_now, feats.funding_avg, feats.funding_ok = fetch_funding(
+        feats.symbol, interval=f_int, limit=f_win, exchange=exchange)
+    return feats

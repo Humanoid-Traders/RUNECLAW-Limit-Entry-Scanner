@@ -47,7 +47,12 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
         return None
 
     high, low, vwap = feats.high, feats.low, feats.vwap
-    atr = max((high - low) / 2.5, 0.0)
+    # v0.2.0: prefer the real Wilder ATR from the kline engine; fall back to the
+    # 24h-range proxy when enrichment was unavailable for this candidate.
+    if getattr(feats, "kline_ok", False) and feats.atr and feats.atr > 0:
+        atr = feats.atr
+    else:
+        atr = max((high - low) / 2.5, 0.0)
     atr_mult = float(cfg.get("atr_limit_mult", "0.5"))
     tp1_pct = float(cfg.get("tp1_pct", "3.5")) / 100.0
     tp2_pct = float(cfg.get("tp2_pct", "7.0")) / 100.0

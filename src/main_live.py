@@ -142,10 +142,27 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     if not qualified:
         return watch(top_symbol, "no_setup_at_or_above_min_score")
 
-    best = qualified[0]
+    # --- Pass 2 (v0.2.0): the cheap ticker scan picked the field; now refine only
+    # the finalists. Enrich the top-N qualified with kline (real ATR + higher-TF
+    # trend) and funding, apply trend alignment + funding crowding, then re-rank.
+    # Bounded call budget (~2 calls x enrich_top_n), graceful-degrades per symbol.
+    enrich_n = max(int(cfg.get("enrich_top_n", 8)), 1)
+    enriched = []
+    for s in qualified[:enrich_n]:
+        features.enrich(s.features, cfg)
+        adj, extra, skip, reason = scoring.enrich_score(s, s.features, cfg)
+        s.dims = {**s.dims, **extra}
+        s.score, s.skip, s.skip_reason = adj, skip, reason
+        if not skip:
+            enriched.append(s)
+    enriched.sort(key=lambda s: s.score, reverse=True)
+    if not enriched:
+        return watch(top_symbol, "no_setup_after_enrichment", {"tradable_candidates": 0})
+
+    best = enriched[0]
     plan = risk.build_plan(best.features, cfg, reg.size_factor, side=direction)
     if plan is None or not plan.sizing_ok:
-        return watch(best.symbol, "sizing_failed", {"tradable_candidates": len(qualified)})
+        return watch(best.symbol, "sizing_failed", {"tradable_candidates": len(enriched)})
 
     # Pre-placement staleness skip (v0.1.17): if the limit entry is already more
     # than limit_chase_pct from current price, it is not a fillable pullback -- in
@@ -160,11 +177,11 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         gap = ((plan.entry - cur) / plan.entry) if plan.side == "short" else ((cur - plan.entry) / plan.entry)
         if gap > chase_pct:
             return watch(best.symbol, "entry_too_far_{:.1f}pct".format(gap * 100.0),
-                         {"tradable_candidates": len(qualified)})
+                         {"tradable_candidates": len(enriched)})
 
     metrics = dict(base_metrics)
     metrics.update({
-        "tradable_candidates": len(qualified),
+        "tradable_candidates": len(enriched),
         "side": plan.side,
         "limit_price": plan.entry,
         "sl_price": plan.sl_price,
@@ -175,11 +192,19 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "margin_usdt": round(plan.margin_usdt, 2),
         "leverage": plan.leverage,
         "sizing_ok": plan.sizing_ok,
+        "kline_ok": bool(best.features.kline_ok),
+        "funding_ok": bool(best.features.funding_ok),
+        "trend_dir": best.features.trend_dir,
+        "funding_now": best.features.funding_now,
     })
     meta = dict(base_meta)
     meta.update({
         "score_dims": best.dims,
         "atr14_est": plan.atr,
+        "atr_source": "kline_wilder" if best.features.kline_ok else "range_proxy",
+        "trend": {"dir": best.features.trend_dir,
+                  "strength": round(best.features.trend_strength, 3)},
+        "funding": {"now": best.features.funding_now, "avg": best.features.funding_avg},
         "size_factor": plan.size_factor,
         "ladder": {
             "tp1_pct": float(cfg.get("tp1_pct", "3.5")),

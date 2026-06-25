@@ -286,6 +286,26 @@ Wires the cycle: features → regime gate → score → plan → `open_if_allowe
 
 ---
 
+## v0.2.0 Engines — Kline & Funding
+
+v0.2.0 adds two deterministic data engines via a **two-pass** scan: the cheap `ticker` pass ranks all 66 symbols (engines 1–3 above), then only the top `enrich_top_n` finalists are enriched with intraday klines and funding before the final pick — keeping the per-cycle call budget bounded (~2 calls × `enrich_top_n`).
+
+### 7. Kline Engine — `features.py: fetch_klines` / `enrich`
+Pulls `data.crypto.futures.kline` (5m/15m/1h/4h) for each finalist and computes:
+- **Wilder ATR** over `atr_period` bars of `kline_interval` — a real ATR that replaces the `(high-low)/2.5` proxy and now drives entry depth and the trailing stop.
+- **Higher-timeframe trend** (`trend_interval`, default 4h): close vs `EMA(trend_lookback)` → `trend_dir` + `trend_strength`.
+
+A **trend-alignment** adjustment (`scoring.enrich_score`) adds up to `trend_weight` points when a finalist agrees with the higher-TF trend and subtracts when it opposes. Any data miss degrades gracefully to the proxy ATR + neutral trend.
+
+### 8. Funding Engine — `features.py: fetch_funding`
+Pulls `data.crypto.futures.funding_rate` and reads the latest rate plus a trailing mean:
+- **Crowding skip:** a long into funding above `+funding_skip_bps`, or a short into funding below `−funding_skip_bps`, is dropped — leaning into the crowded, mean-reversion-prone side.
+- **Soft penalty:** milder adverse funding subtracts up to `funding_penalty_weight` points.
+
+Both engines are deterministic and bounded. Full spec: [`docs/DESIGN_v0.2.0.md`](docs/DESIGN_v0.2.0.md).
+
+---
+
 ## 中文说明 (Plain-language summary)
 
 ### 策略 (Strategy)
