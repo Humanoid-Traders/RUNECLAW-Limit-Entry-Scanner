@@ -31,6 +31,8 @@ class Scored:
     skip: bool
     skip_reason: str
     features: SymbolFeatures
+    size_factor: float = 1.0   # carried from the candidate's universe regime
+    universe: str = ""         # which universe (leader) produced this candidate
 
 
 def regime(btc: SymbolFeatures, taker_ratio: Optional[float], cfg: dict) -> Regime:

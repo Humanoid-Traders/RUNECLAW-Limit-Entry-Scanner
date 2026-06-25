@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.2.0"
+version: "0.3.0"
 description: "Live two-sided perpetual-futures scanner that ranks a configurable universe behind a market-regime gate and places pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided scanner for USDT-margined perpetual futures that aims
@@ -111,6 +111,14 @@ strategy_config:
   funding_window: 8
   funding_skip_bps: "30"
   funding_penalty_weight: "8.0"
+  # v0.3.0 — multi-universe scanning; each universe gates on its own leader.
+  # A universe with no 'symbols' inherits the trading_symbols list above.
+  universes:
+    - name: "crypto"
+      leader: "BTCUSDT"
+    - name: "metals"
+      leader: "XAUUSDT"
+      symbols: ["XAUUSDT", "XAGUSDT", "XPTUSDT", "XPDUSDT", "COPPERUSDT"]
 
 user_config_schema:
   trading_symbols:

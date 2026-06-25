@@ -65,59 +65,107 @@ def _field_health(ft) -> dict:
             ("last", "vwap", "high", "low", "change_pct", "quote_volume", "bid_volume", "ask_volume")}
 
 
-def build_decision(cfg: dict, mgmt: dict) -> dict:
-    universe = [str(s).upper() for s in (cfg.get("trading_symbols") or [])]
-    if _GATE not in universe:
-        universe = [_GATE] + universe
-    max_scan = int(cfg.get("max_scan_symbols", len(universe)) or len(universe))
-    min_score = float(cfg.get("min_score", 70))
+def _universes(cfg: dict) -> list:
+    """List of {name, leader, symbols, allow_short}. Falls back to the legacy
+    single BTC-led universe from ``trading_symbols`` when ``universes`` is unset."""
+    default_syms = [str(s).upper() for s in (cfg.get("trading_symbols") or [])]
+    out = []
+    for u in (cfg.get("universes") or []):
+        if not isinstance(u, dict):
+            continue
+        leader = str(u.get("leader", _GATE)).upper()
+        # a universe with no explicit symbols inherits the default trading_symbols
+        syms = [str(s).upper() for s in (u.get("symbols") or [])] or default_syms
+        if syms:
+            out.append({"name": str(u.get("name", leader)), "leader": leader,
+                        "symbols": syms, "allow_short": u.get("allow_short")})
+    if out:
+        return out
+    return [{"name": "crypto", "leader": _GATE, "symbols": default_syms, "allow_short": None}]
 
-    # --- BTC regime gate ---
-    btc = features.fetch_symbol(_GATE)
-    taker = features.taker_buy_ratio(_GATE)
-    reg = scoring.regime(btc, taker, cfg)
+
+def _scan_universe(uni: dict, cfg: dict) -> dict:
+    """Resolve one universe's regime from its own leader and score its symbols.
+    Each candidate is tagged with the universe name and its regime size_factor."""
+    leader_sym = uni["leader"]
+    ucfg = cfg
+    if uni.get("allow_short") is not None:
+        ucfg = dict(cfg)
+        ucfg["allow_short"] = bool(uni["allow_short"])
+    leader_feats = features.fetch_symbol(leader_sym)
+    taker = features.taker_buy_ratio(leader_sym)
+    reg = scoring.regime(leader_feats, taker, ucfg)
     direction = reg.direction
     scan_direction = direction if direction in ("long", "short") else "long"
-
-    # --- ALWAYS scan the universe for visibility (Audit #1/#5/#9) ---
-    candidates = [s for s in universe if s != _GATE][: max(max_scan - 1, 0)]
+    max_scan = int(cfg.get("max_scan_symbols", len(uni["symbols"])) or len(uni["symbols"]))
+    min_score = float(cfg.get("min_score", 70))
+    candidates = [s for s in uni["symbols"] if s != leader_sym][: max(max_scan, 0)]
     feats = [features.fetch_symbol(s) for s in candidates]
-    scored = scoring.score_universe(feats, btc, cfg, scan_direction)
-    board = _board(scored)
-    best_score = round(scored[0].score, 1) if scored else 0.0
+    scored = scoring.score_universe(feats, leader_feats, ucfg, scan_direction)
+    for s in scored:
+        s.universe = uni["name"]
+        s.size_factor = reg.size_factor
+    qualified = ([s for s in scored if not s.skip and s.score >= min_score]
+                 if direction in ("long", "short") else [])
+    return {"name": uni["name"], "leader": leader_sym, "regime": reg,
+            "leader_feats": leader_feats, "direction": direction,
+            "scored": scored, "qualified": qualified}
 
+
+def build_decision(cfg: dict, mgmt: dict) -> dict:
+    min_score = float(cfg.get("min_score", 70))
+    unis = _universes(cfg)
+    scans = [_scan_universe(u, cfg) for u in unis]
+
+    # --- merge board + qualified pool across universes (mixed sides) ---
+    all_scored = []
+    for sc in scans:
+        all_scored.extend(sc["scored"])
+    all_scored.sort(key=lambda s: (not s.skip, s.score), reverse=True)
+    board = _board(all_scored)
+    best_score = round(all_scored[0].score, 1) if all_scored else 0.0
+
+    qualified = []
+    for sc in scans:
+        qualified.extend(sc["qualified"])
+    qualified.sort(key=lambda s: s.score, reverse=True)
+
+    any_active = any(sc["direction"] in ("long", "short") for sc in scans)
     circuit = mgmt.get("circuit", "ok")
-    size_mode = "full" if reg.size_factor >= 1.0 else ("reduced" if reg.size_factor > 0 else "blocked")
 
-    btc_vs_vwap = round((btc.last / btc.vwap - 1.0) * 100.0, 3) if (btc.ok and btc.last and btc.vwap) else None
+    regime_by_uni = {}
+    for sc in scans:
+        reg, lf = sc["regime"], sc["leader_feats"]
+        regime_by_uni[sc["name"]] = {
+            "leader": sc["leader"],
+            "direction": sc["direction"],
+            "size_factor": reg.size_factor,
+            "leader_vs_vwap": (round((lf.last / lf.vwap - 1.0) * 100.0, 3)
+                               if (lf.ok and lf.last and lf.vwap) else None),
+            "long_gate": reg.detail.get("long_gate_score"),
+            "short_gate": reg.detail.get("short_gate_score"),
+        }
+
     base_metrics = {
-        "regime": {"direction": direction, "gate_open": direction != "none", "btc_vs_vwap": btc_vs_vwap},
-        "regime_dir": direction,
-        "data_health": {
-            "kline_ok": bool(btc.ok and btc.last is not None and btc.vwap is not None
-                             and btc.high is not None and btc.low is not None),
-            "book_ok": bool(btc.bid_volume is not None and btc.ask_volume is not None),
-            "funding_ok": bool(taker is not None),
-        },
-        "long_gate_score": reg.detail.get("long_gate_score"),
-        "short_gate_score": reg.detail.get("short_gate_score"),
+        "regime_by_universe": regime_by_uni,
+        "any_regime_open": any_active,
         "best_score": best_score,
         "min_score": min_score,
-        "scanned": len(candidates),
-        "size_mode": size_mode,
+        "scanned": sum(len(sc["scored"]) for sc in scans),
+        "universes": [sc["name"] for sc in scans],
         "circuit": circuit,
         "today_pnl": mgmt.get("today_pnl"),
         "open_count": mgmt.get("open_count", 0),
     }
     base_meta = {
-        "gate": reg.detail,
-        "gate_summary": _gate_summary(reg),
+        "regime_by_universe": regime_by_uni,
+        "gate_summary": " || ".join("{}: {}".format(sc["name"], _gate_summary(sc["regime"]))
+                                    for sc in scans),
         "board": board,
         "open_symbols": mgmt.get("open_symbols", []),
         "mgmt_actions": mgmt.get("actions", []),
         "controls_active": mgmt.get("controls_active", {}),
-        "data_health": {"BTC": _field_health(btc),
-                        **{s.symbol: _field_health(s.features) for s in scored[:3]}},
+        "data_health": {sc["leader"]: _field_health(sc["leader_feats"]) for sc in scans},
         "run_id": runtime.run_id,
     }
 
@@ -131,14 +179,12 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         return {"action": "watch", "symbol": symbol, "confidence": 0.0,
                 "metrics": metrics, "meta": meta, "plan": None}
 
-    top_symbol = scored[0].symbol if scored else _GATE
+    top_symbol = all_scored[0].symbol if all_scored else unis[0]["leader"]
 
     if circuit in ("paused", "tripped"):
         return watch(top_symbol, "circuit_" + str(circuit))
-    if direction == "none":
-        return watch(top_symbol, "btc_regime_neutral")
-
-    qualified = [s for s in scored if not s.skip and s.score >= min_score]
+    if not any_active:
+        return watch(top_symbol, "all_regimes_neutral")
     if not qualified:
         return watch(top_symbol, "no_setup_at_or_above_min_score")
 
@@ -160,7 +206,7 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         return watch(top_symbol, "no_setup_after_enrichment", {"tradable_candidates": 0})
 
     best = enriched[0]
-    plan = risk.build_plan(best.features, cfg, reg.size_factor, side=direction)
+    plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side)
     if plan is None or not plan.sizing_ok:
         return watch(best.symbol, "sizing_failed", {"tradable_candidates": len(enriched)})
 
@@ -196,6 +242,7 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "funding_ok": bool(best.features.funding_ok),
         "trend_dir": best.features.trend_dir,
         "funding_now": best.features.funding_now,
+        "universe": best.universe,
     })
     meta = dict(base_meta)
     meta.update({

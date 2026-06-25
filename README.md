@@ -306,6 +306,23 @@ Both engines are deterministic and bounded. Full spec: [`docs/DESIGN_v0.2.0.md`]
 
 ---
 
+## v0.3.0 — Multi-Universe (Metals)
+
+v0.3.0 generalizes the single BTC-gated scan into **N universes, each with its own regime leader**, run in one cycle and merged into one candidate pool (one instance per account → both asset classes live in one playbook). The scoring/regime engines are leader-agnostic, so this is an orchestration change, not an engine rewrite.
+
+Default `strategy_config.universes`:
+
+| Universe | Leader | Symbols |
+|---|---|---|
+| `crypto` | `BTCUSDT` | the 66-symbol `trading_symbols` list (inherited) |
+| `metals` | `XAUUSDT` (gold) | `XAUUSDT, XAGUSDT, XPTUSDT, XPDUSDT, COPPERUSDT` |
+
+Each universe resolves its **own** regime from its leader (gold gates the metals class; BTC gates crypto), scores its symbols for that direction, and contributes qualified candidates to a merged pool. Pass-2 enrichment, the caps, and the final pick operate on the pool — so one cycle can short metals while it longs crypto. A universe with no `symbols` inherits `trading_symbols`; with no `universes` config at all, the scanner falls back to the legacy single BTC universe (fully backward-compatible).
+
+Spec: [`docs/DESIGN_v0.3.0.md`](docs/DESIGN_v0.3.0.md). **Deferred:** stock perps (`SPXUSDT`/`QQQUSDT` as index leaders + market-hours/session handling) become another `universes` entry once session logic lands.
+
+---
+
 ## 中文说明 (Plain-language summary)
 
 ### 策略 (Strategy)
