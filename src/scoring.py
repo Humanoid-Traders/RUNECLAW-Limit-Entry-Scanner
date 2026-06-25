@@ -192,3 +192,43 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
 
     results.sort(key=lambda s: (not s.skip, s.score), reverse=True)
     return results
+
+
+def enrich_score(scored: Scored, feats: SymbolFeatures, cfg: dict) -> tuple:
+    """v0.2.0 pass-2 adjustment for an already-qualified candidate: higher-TF
+    trend alignment (bonus/penalty) plus a funding crowding skip + soft penalty.
+
+    Returns ``(adjusted_score, extra_dims, skip, skip_reason)``. Degrades to a
+    no-op when the candidate has no kline/funding data (enrichment failed)."""
+    side = scored.side
+    base = scored.score
+    skip, reason = scored.skip, scored.skip_reason
+    extra: dict = {"base_score": round(base, 2)}
+
+    # --- trend alignment: reward agreement with the higher-TF trend, punish opposition
+    trend_weight = float(cfg.get("trend_weight", "15.0"))
+    trend_adj = 0.0
+    if feats.kline_ok and feats.trend_dir in ("long", "short"):
+        sign = 1.0 if feats.trend_dir == side else -1.0
+        trend_adj = sign * trend_weight * max(0.0, min(feats.trend_strength, 1.0))
+    extra["trend_dir"] = feats.trend_dir
+    extra["trend_adj"] = round(trend_adj, 2)
+
+    # --- funding: skip into a crowded extreme, soft-penalize milder adverse funding
+    funding_penalty = 0.0
+    funding_skip = False
+    if feats.funding_ok and feats.funding_now is not None:
+        bps = feats.funding_now * 10000.0  # decimal funding rate -> basis points
+        extra["funding_bps"] = round(bps, 3)
+        skip_bps = float(cfg.get("funding_skip_bps", "30"))
+        pen_weight = float(cfg.get("funding_penalty_weight", "8.0"))
+        adverse = bps if side == "long" else -bps  # leaning into the crowded side
+        if not skip and skip_bps > 0 and adverse > skip_bps:
+            skip, reason, funding_skip = True, "funding_crowded_" + side, True
+        elif adverse > 0 and skip_bps > 0:
+            funding_penalty = pen_weight * min(adverse / skip_bps, 1.0)
+    extra["funding_skip"] = funding_skip
+
+    adjusted = max(base + trend_adj - funding_penalty, 0.0)
+    extra["adjusted_score"] = round(adjusted, 2)
+    return (adjusted, extra, skip, reason)

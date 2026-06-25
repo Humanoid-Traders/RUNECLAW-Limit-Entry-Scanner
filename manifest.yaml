@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.1.21"
+version: "0.2.0"
 description: "Live two-sided perpetual-futures scanner that ranks a configurable universe behind a market-regime gate and places pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided scanner for USDT-margined perpetual futures that aims
@@ -98,6 +98,19 @@ strategy_config:
   limit_chase_pct: "3.0"
   size_scope_mult: "1.5"
   breakeven_trigger_usdt: "20"
+  # v0.2.0 — kline engine (multi-timeframe ATR + higher-TF trend)
+  kline_interval: "1h"
+  atr_period: 14
+  trend_interval: "4h"
+  trend_lookback: 12
+  trend_norm: "0.05"
+  trend_weight: "15.0"
+  enrich_top_n: 8
+  # v0.2.0 — funding engine (crowding skip + soft penalty)
+  funding_interval: "1h"
+  funding_window: 8
+  funding_skip_bps: "30"
+  funding_penalty_weight: "8.0"
 
 user_config_schema:
   trading_symbols:
