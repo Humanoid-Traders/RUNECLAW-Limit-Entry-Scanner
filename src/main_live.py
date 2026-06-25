@@ -272,17 +272,19 @@ def run() -> None:
     oP = mgmt.get("owned_pending", "?")
     acts = len(mgmt.get("actions", []) or [])
     merr = str(mgmt.get("mgmt_error") or mgmt.get("position_query_error") or "ok")[:16]
-    rshort = full_reason.replace(" ", "_")[:16]
+    rshort = full_reason.replace(" ", "_")[:32]
     pshape = str(mgmt.get("pending_shape", ""))[:30]
     preason = str(mgmt.get("pending_reason", ""))[:24]
-    # When pT is still 0, disambiguate WHY: a non-success pending envelope surfaces
-    # its exchange code:msg as `perr.` (the query failed); otherwise show the result
-    # shape as `shp.` (the query succeeded but the row parse missed). Falls back to
-    # the placement reason when pT > 0.
+    # Tail, finalized (v0.1.20). Diagnostics are complete: the pending read path is
+    # confirmed working live and pT0 is simply a flat / just-placed book, so the old
+    # `shp.<envelope-keys>` empty-book dump is retired -- it was pure noise that read
+    # as an error (misdiagnosed 3x). Two cases remain, in priority order:
+    #   1. perr.<code:msg> -- the pending fetch genuinely FAILED (actionable error)
+    #   2. <reason>        -- why nothing was placed / what was decided, untruncated:
+    #      none, correlation_budget, entry_already_pending, stale_limit_cancel, ...
+    # The full envelope shape is preserved in metrics (pending_shape) for deep debug.
     if str(pT) == "0" and preason:
         tail = "perr." + preason
-    elif str(pT) == "0" and pshape:
-        tail = "shp." + pshape
     else:
         tail = rshort
     dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}-{t}"
@@ -294,6 +296,7 @@ def run() -> None:
                  "open_count": own, "pending_total": pT, "owned_pending": oP,
                  "mgmt_actions": mgmt.get("actions", []), "mgmt_error": merr,
                  "pending_reason": mgmt.get("pending_reason", ""),
+                 "pending_shape": mgmt.get("pending_shape", ""),
                  "state_runs": mgmt.get("state_runs"),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
