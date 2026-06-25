@@ -274,9 +274,17 @@ def run() -> None:
     merr = str(mgmt.get("mgmt_error") or mgmt.get("position_query_error") or "ok")[:16]
     rshort = full_reason.replace(" ", "_")[:16]
     pshape = str(mgmt.get("pending_shape", ""))[:30]
-    # When pT is still 0, show the pending-result shape (its top-level keys) so a
-    # remaining parse miss vs a genuinely empty unfiltered result is visible.
-    tail = ("shp." + pshape) if (str(pT) == "0" and pshape) else rshort
+    preason = str(mgmt.get("pending_reason", ""))[:24]
+    # When pT is still 0, disambiguate WHY: a non-success pending envelope surfaces
+    # its exchange code:msg as `perr.` (the query failed); otherwise show the result
+    # shape as `shp.` (the query succeeded but the row parse missed). Falls back to
+    # the placement reason when pT > 0.
+    if str(pT) == "0" and preason:
+        tail = "perr." + preason
+    elif str(pT) == "0" and pshape:
+        tail = "shp." + pshape
+    else:
+        tail = rshort
     dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}-{t}"
            .format(f=int(follow), em=emc, own=own, pt=pT, op=oP, a=acts,
                    c=int(called), p=pcode, t=tail))[:63]
@@ -285,6 +293,8 @@ def run() -> None:
         metrics={"dbg": dbg, "follow": follow, "exec_mode": exec_mode,
                  "open_count": own, "pending_total": pT, "owned_pending": oP,
                  "mgmt_actions": mgmt.get("actions", []), "mgmt_error": merr,
+                 "pending_reason": mgmt.get("pending_reason", ""),
+                 "state_runs": mgmt.get("state_runs"),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
     )

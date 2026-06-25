@@ -239,9 +239,20 @@ def manage_open_state(cfg: dict) -> dict:
     soft = float(cfg.get("circuit_pause_usdt", "30"))
     hard = float(cfg.get("circuit_stop_usdt", "40"))
 
+    # --- .state/ persistence probe (DEEP_AUDIT #1) ---------------------------
+    # The circuit breaker assumes .state/ carries day_start_equity across runs;
+    # the ownership layer assumes .state/ does NOT persist. The runtime docs say
+    # .state/ IS the only supported persisted path -- but the runner only
+    # "may optionally" hydrate it. Carry a monotonic run counter so the live DBG
+    # shows whether state actually round-trips: state_runs climbing across cycles
+    # == persists (circuit breaker valid, ownership-by-size is an unjustified
+    # workaround); stuck at 1 == ephemeral (circuit breaker is non-functional).
+    state = _read_state()
+    state["runs"] = int(state.get("runs", 0) or 0) + 1
+    status["state_runs"] = state["runs"]
+
     # --- circuit breaker via account equity persisted in .state/ ---
     equity = _account_equity()
-    state = _read_state()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if equity is not None:
         if state.get("date") != today or "day_start_equity" not in state:
@@ -255,7 +266,9 @@ def manage_open_state(cfg: dict) -> dict:
         elif today_pnl <= -abs(soft):
             status["circuit"] = "paused"
         state["last_equity"] = equity
-        _write_state(state)
+    # Persist regardless of equity availability so the run counter survives even
+    # when the account-equity parse fails this cycle.
+    _write_state(state)
 
     # --- live snapshot: positions + pending orders (the only source of truth;
     # .state/ does not persist between scheduled runs) ---
@@ -270,6 +283,18 @@ def manage_open_state(cfg: dict) -> dict:
     except Exception as exc:
         pending_raw = None
         status["pending_error"] = type(exc).__name__
+    # A non-raising error envelope (live shape: {code, message, data, trace_id})
+    # must NOT be read as "no pending orders" -- that silently blinds limit-expiry
+    # and the circuit cancel loop (the live pT0). Probe success and surface the
+    # exchange code:msg, so a failed query is distinguishable from an empty book
+    # and the next cycle's DBG says whether pT0 is an error or a parse miss.
+    if pending_raw is not None:
+        try:
+            pending_ok = bool(trade.is_success(pending_raw))
+        except Exception:
+            pending_ok = True
+        if not pending_ok:
+            status["pending_reason"] = _result_reason(pending_raw)
     pending_records = _extract_rows(pending_raw) if pending_raw is not None else []
     status["pending_shape"] = _shape(pending_raw)[:40] if pending_raw is not None else "none"
 
