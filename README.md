@@ -1,8 +1,8 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** | GetAgent playbook `0791942e` | Instance `ad079b69` | v0.1.21
+**Live on Bitget** | GetAgent playbook `runeclaw-limit-scanner` | v0.4.0
 
-> RUNECLAW is a two-sided perpetual futures scanner that gates entries behind a market-regime check, ranks a 66-symbol universe by a blended score, and places resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it.
+> RUNECLAW is a two-sided, **multi-asset** perpetual-futures scanner across **crypto, equities, and commodities (precious metals)** — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold), ranked by a blended score, and entered with resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it.
 
 ---
 
@@ -310,18 +310,25 @@ Both engines are deterministic and bounded. Full spec: [`docs/DESIGN_v0.2.0.md`]
 
 v0.3.0 generalizes the single BTC-gated scan into **N universes, each with its own regime leader**, run in one cycle and merged into one candidate pool (one instance per account → both asset classes live in one playbook). The scoring/regime engines are leader-agnostic, so this is an orchestration change, not an engine rewrite.
 
-Default `strategy_config.universes`:
+Default `strategy_config.universes` (**v0.4.0 — three asset classes**):
 
-| Universe | Leader | Symbols |
+| Universe | Leader | Candidates |
 |---|---|---|
 | `crypto` | `BTCUSDT` | the 66-symbol `trading_symbols` list (inherited) |
-| `metals` | `XAUUSDT` (gold) | `XAGUSDT` (silver) — *v0.3.1: Pt/Pd/Cu pruned (always below `min_volume_usdt`)* |
+| `equities` | `QQQUSDT` (Nasdaq proxy) | `TSLAUSDT, NVDAUSDT, MSTRUSDT` |
+| `metals` | `XAUUSDT` (gold) | `XAGUSDT` (silver) |
 
-> **v0.3.1 notes:** the metals universe is pruned to **silver-only** — gold leads/gates, silver (~$257M/24h) is the one liquid metal candidate; platinum/palladium/copper sit permanently below the $10M volume floor so they were dead weight. Also, the DBG **tail now surfaces a fired management action** as `act.<type>` (e.g. `act.stale_limit_cancel`, `act.limit_expiry_cancel`) instead of a bare `act{N}` with a `none` tail — so chase/expiry/circuit/TP verdicts are unambiguous on the DBG line itself.
+Each universe resolves its **own** regime from its leader and scores its symbols for that direction; all classes' qualified candidates merge into one pool, so a single cycle can short equities while it longs crypto. A universe with no `symbols` inherits `trading_symbols`; with no `universes` config at all, the scanner falls back to the legacy single-BTC universe (fully backward-compatible).
 
-Each universe resolves its **own** regime from its leader (gold gates the metals class; BTC gates crypto), scores its symbols for that direction, and contributes qualified candidates to a merged pool. Pass-2 enrichment, the caps, and the final pick operate on the pool — so one cycle can short metals while it longs crypto. A universe with no `symbols` inherits `trading_symbols`; with no `universes` config at all, the scanner falls back to the legacy single BTC universe (fully backward-compatible).
+**Why only these names** — every candidate must clear `min_volume_usdt` ($10M/24h) or it's `thin_volume`-skipped. Liquidity audit of Bitget's TradFi catalog:
+- **Equities (liquid):** `QQQ` $19M, `TSLA` $12M, `NVDA` $11M, `MSTR` $27M. Thin (excluded): SPX, AAPL, MSFT, AMZN, GOOGL, META, COIN, V, ABNB, LIN, OPENAI, ANTHROPIC.
+- **Metals (liquid):** gold $188M (leader), silver $260M. XAUT/PAXG ($49M/$17M) are gold duplicates; Pt/Pd thin.
+- **Energy (not yet a universe):** WTI crude `CL` $31M is liquid, but Brent ($9.9M) and NatGas are below the floor — so energy has **no liquid leader** to gate a clean universe. Deferred until a second energy name clears.
+- **ETFs (all thin):** SGOV/KWEB/DFEN/EWH/INDA/XLU — excluded.
 
-Spec: [`docs/DESIGN_v0.3.0.md`](docs/DESIGN_v0.3.0.md). **Deferred:** stock perps (`SPXUSDT`/`QQQUSDT` as index leaders + market-hours/session handling) become another `universes` entry once session logic lands.
+> **v0.3.1 carry-over:** metals pruned to silver-only; the DBG **tail surfaces a fired management action** as `act.<type>` (e.g. `act.stale_limit_cancel`) instead of a bare `act{N}` with a `none` tail.
+
+Spec: [`docs/DESIGN_v0.3.0.md`](docs/DESIGN_v0.3.0.md). **Deferred:** energy commodities (`CL` liquid; needs a 2nd liquid energy name for a clean crude-led universe) and session/gap handling for equities (stock perps track underlying markets that gap on session boundaries — off-hours liquidity is thinner).
 
 ---
 
