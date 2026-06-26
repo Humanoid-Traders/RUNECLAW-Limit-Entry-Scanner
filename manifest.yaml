@@ -6,60 +6,51 @@ long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
   futures that aims to trade with the prevailing regime rather than against it.
   It scans three asset classes in parallel — crypto, equities (RWA US stock
-  perps), and commodities (precious metals) — and each class is gated by its own
+  perps), and commodities (precious metals) — each gated by its own
   market-regime leader: BTC for crypto, the Nasdaq proxy QQQ for equities, and
   gold for commodities.
-  The thesis is that the cleanest intraday entries come from assets already moving
-  in their leader's direction, positioned in the favorable part of their recent
-  range, supported by real resting demand on the side it wants to trade. Before
-  any candidate is considered, the strategy reads that class's regime; when the
-  backdrop is weak or mixed it stands aside for that class and opens nothing,
-  treating capital preservation as the first job. Each class's qualified
-  candidates are merged into one pool, so a single cycle can, for example, short
-  equities while it longs crypto — subject to the portfolio concurrency and
-  correlation caps.
 
-  When the leader is constructive the scanner looks for longs; when the leader is
-  clearly weak it looks for shorts. Either way it ranks the configured universe
-  with a blended score built from relative strength versus the leader, location
-  against the day's volume-weighted average price, position within the session
-  range, resting order-book balance, and traded liquidity, with every dimension
-  mirrored for the side being sought. Only names that clear a quality bar become
-  candidates. It enters with a resting limit order placed on the favorable side of
-  the day's average price, waiting for a normal retracement instead of chasing.
+  The thesis is that the cleanest intraday entries come from assets already
+  moving in their leader's direction, positioned in the favorable part of their
+  recent range, supported by real resting demand on the side it wants to trade.
+  Before any candidate is considered, the strategy reads that class's regime;
+  when the backdrop is weak or mixed it stands aside for that class and opens
+  nothing, treating capital preservation as the first job. Each class's qualified
+  candidates are merged into one pool, so a single cycle can short equities while
+  it longs crypto — subject to portfolio concurrency and correlation caps.
 
-  Exits are layered and risk-first. A protective stop sits beyond the level the
-  market has recently defended, profit is taken in stages, a remaining portion is
-  trailed so a strong move can keep working, and the stop is lifted toward
-  breakeven once a trade moves enough in favor. A portfolio layer caps how many
-  positions run at once, limits correlated exposure, expires stale resting orders,
-  applies an intraday time-stop, and halts new entries when the day's running loss
-  breaches a circuit breaker.
+  When a leader is constructive the scanner looks for longs; when it is clearly
+  weak it looks for shorts. It ranks the universe with a blended score built from
+  relative strength versus the leader, location against the day's VWAP, position
+  within the session range, resting order-book balance, and traded liquidity —
+  every dimension mirrored for the side being sought. Only names that clear a
+  quality bar become candidates. It enters with a resting limit on the favorable
+  side of VWAP, waiting for a normal retracement instead of chasing.
 
-  Under the hood RUNECLAW is six cooperating engines, run once per cycle: a
-  feature engine that pulls one 24h ticker snapshot per symbol; a regime engine
-  that gates direction off the leader's daily change, VWAP side, and taker flow;
-  a scoring engine that blends relative momentum, VWAP location, range position,
-  order-book balance, and traded liquidity into a 0-100 directional score; a risk
-  engine that solves position size backward from a fixed per-trade dollar loss and
-  caps it by the margin budget; an execution engine that places the pullback limit
-  and owns the live book (size-scoped ownership, stale-limit expiry, chase-cancel,
-  intraday time-stop, and the daily circuit breaker); and an orchestrator that
-  wires the cycle and emits one compact, readable diagnostic line summarizing what
-  every engine did. The README documents each engine and its parameters in full.
+  Exits are layered and risk-first: a protective stop beyond the recently
+  defended level, staged profit-taking, a trailed remainder so strong moves keep
+  working, and a stop lifted toward breakeven once a trade moves enough in favor.
+  A portfolio layer caps concurrent positions, limits correlated exposure,
+  expires stale resting orders, applies an intraday time-stop, and halts new
+  entries when the day's running loss breaches a circuit breaker.
+
+  Under the hood it is six cooperating engines run once per cycle — feature
+  (one 24h ticker per symbol), regime (gates direction off the leader), scoring
+  (the 0-100 directional blend), risk (size solved backward from a fixed
+  per-trade dollar loss, capped by the margin budget), execution (places the
+  pullback limit and owns the live book: size-scoped ownership, stale-limit
+  expiry, chase-cancel, time-stop, circuit breaker), and an orchestrator that
+  emits one compact diagnostic line per cycle. The README documents each in full.
 
   Subscribers can tune the universe, leverage, the margin budget that anchors
-  sizing and the displayed return, the per-trade dollar risk cap, the number of
-  names scanned per pass, the score required to act, whether shorting is enabled,
-  and how many positions may run concurrently. Higher leverage or risk cap
-  enlarges gains and drawdowns alike; widening the universe spreads attention but
-  increases data load.
+  sizing and the displayed return, the per-trade dollar risk cap, names scanned
+  per pass, the score required to act, whether shorting is enabled, and how many
+  positions run concurrently.
 
-  The strategy underperforms when the leader chops without direction, when breadth
-  is weak, or when fast moves slice through stops; by design it can sit idle for
-  long stretches. Past performance is not a guarantee, and live trading pays fees
-  and slippage that erode edge, so size every position to a drawdown you can
-  tolerate.
+  The strategy underperforms when leaders chop without direction or fast moves
+  slice through stops; by design it can sit idle for long stretches. Past
+  performance is not a guarantee, and live trading pays fees and slippage that
+  erode edge, so size every position to a drawdown you can tolerate.
 market_type: contract
 trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "BNBUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "BCHUSDT", "AVAXUSDT", "NEARUSDT", "AAVEUSDT", "WLDUSDT", "XPLUSDT", "XLMUSDT", "TRUMPUSDT", "MUSDT", "INJUSDT", "SEIUSDT", "PEPEUSDT", "SHIBUSDT"]
 tags: ["scanner", "momentum", "vwap", "orderbook", "contract", "live", "runeclaw"]
