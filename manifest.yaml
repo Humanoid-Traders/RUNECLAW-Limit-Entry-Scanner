@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.4.0"
+version: "0.4.1"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -61,7 +61,7 @@ long_description: |
   and slippage that erode edge, so size every position to a drawdown you can
   tolerate.
 market_type: contract
-trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "JTOUSDT", "BNBUSDT", "SUIUSDT", "FILUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "SKYAIUSDT", "BCHUSDT", "AVAXUSDT", "PENGUUSDT", "SIRENUSDT", "DOTUSDT", "ICPUSDT", "NEARUSDT", "LTCUSDT", "VIRTUALUSDT", "PUMPUSDT", "DYDXUSDT", "WLFIUSDT", "FARTCOINUSDT", "AAVEUSDT", "UNIUSDT", "OPUSDT", "ASTERUSDT", "DASHUSDT", "WLDUSDT", "WIFUSDT", "ORDIUSDT", "ARBUSDT", "TRXUSDT", "XPLUSDT", "RAVEUSDT", "XLMUSDT", "ETCUSDT", "TRUMPUSDT", "APTUSDT", "HBARUSDT", "1000BONKUSDT", "VVVUSDT", "BIOUSDT", "MUSDT", "CHIPUSDT", "PENDLEUSDT", "XMRUSDT", "ALGOUSDT", "CRVUSDT", "TIAUSDT", "RENDERUSDT", "INJUSDT", "JUPUSDT", "FETUSDT", "APEUSDT", "SEIUSDT", "ATOMUSDT", "LDOUSDT"]
+trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "BNBUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "BCHUSDT", "AVAXUSDT", "NEARUSDT", "AAVEUSDT", "WLDUSDT", "XPLUSDT", "XLMUSDT", "TRUMPUSDT", "MUSDT", "INJUSDT", "SEIUSDT", "PEPEUSDT", "SHIBUSDT"]
 tags: ["scanner", "momentum", "vwap", "orderbook", "contract", "live", "runeclaw"]
 
 schedule:
@@ -75,11 +75,11 @@ execution_mode: signal_only
 follow_trade_supported: true
 
 strategy_config:
-  trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "JTOUSDT", "BNBUSDT", "SUIUSDT", "FILUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "SKYAIUSDT", "BCHUSDT", "AVAXUSDT", "PENGUUSDT", "SIRENUSDT", "DOTUSDT", "ICPUSDT", "NEARUSDT", "LTCUSDT", "VIRTUALUSDT", "PUMPUSDT", "DYDXUSDT", "WLFIUSDT", "FARTCOINUSDT", "AAVEUSDT", "UNIUSDT", "OPUSDT", "ASTERUSDT", "DASHUSDT", "WLDUSDT", "WIFUSDT", "ORDIUSDT", "ARBUSDT", "TRXUSDT", "XPLUSDT", "RAVEUSDT", "XLMUSDT", "ETCUSDT", "TRUMPUSDT", "APTUSDT", "HBARUSDT", "1000BONKUSDT", "VVVUSDT", "BIOUSDT", "MUSDT", "CHIPUSDT", "PENDLEUSDT", "XMRUSDT", "ALGOUSDT", "CRVUSDT", "TIAUSDT", "RENDERUSDT", "INJUSDT", "JUPUSDT", "FETUSDT", "APEUSDT", "SEIUSDT", "ATOMUSDT", "LDOUSDT"]
+  trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "BNBUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "BCHUSDT", "AVAXUSDT", "NEARUSDT", "AAVEUSDT", "WLDUSDT", "XPLUSDT", "XLMUSDT", "TRUMPUSDT", "MUSDT", "INJUSDT", "SEIUSDT", "PEPEUSDT", "SHIBUSDT"]
   leverage: 10
   margin_budget: "100"
   max_loss_usdt: "15"
-  max_scan_symbols: 66
+  max_scan_symbols: 28
   min_score: 70
   conditional_score: 50
   min_volume_usdt: "10000000"
@@ -143,10 +143,10 @@ user_config_schema:
   trading_symbols:
     type: array
     item_type: string
-    default: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "JTOUSDT", "BNBUSDT", "SUIUSDT", "FILUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "SKYAIUSDT", "BCHUSDT", "AVAXUSDT", "PENGUUSDT", "SIRENUSDT", "DOTUSDT", "ICPUSDT", "NEARUSDT", "LTCUSDT", "VIRTUALUSDT", "PUMPUSDT", "DYDXUSDT", "WLFIUSDT", "FARTCOINUSDT", "AAVEUSDT", "UNIUSDT", "OPUSDT", "ASTERUSDT", "DASHUSDT", "WLDUSDT", "WIFUSDT", "ORDIUSDT", "ARBUSDT", "TRXUSDT", "XPLUSDT", "RAVEUSDT", "XLMUSDT", "ETCUSDT", "TRUMPUSDT", "APTUSDT", "HBARUSDT", "1000BONKUSDT", "VVVUSDT", "BIOUSDT", "MUSDT", "CHIPUSDT", "PENDLEUSDT", "XMRUSDT", "ALGOUSDT", "CRVUSDT", "TIAUSDT", "RENDERUSDT", "INJUSDT", "JUPUSDT", "FETUSDT", "APEUSDT", "SEIUSDT", "ATOMUSDT", "LDOUSDT"]
-    options: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "JTOUSDT", "BNBUSDT", "SUIUSDT", "FILUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "SKYAIUSDT", "BCHUSDT", "AVAXUSDT", "PENGUUSDT", "SIRENUSDT", "DOTUSDT", "ICPUSDT", "NEARUSDT", "LTCUSDT", "VIRTUALUSDT", "PUMPUSDT", "DYDXUSDT", "WLFIUSDT", "FARTCOINUSDT", "AAVEUSDT", "UNIUSDT", "OPUSDT", "ASTERUSDT", "DASHUSDT", "WLDUSDT", "WIFUSDT", "ORDIUSDT", "ARBUSDT", "TRXUSDT", "XPLUSDT", "RAVEUSDT", "XLMUSDT", "ETCUSDT", "TRUMPUSDT", "APTUSDT", "HBARUSDT", "1000BONKUSDT", "VVVUSDT", "BIOUSDT", "MUSDT", "CHIPUSDT", "PENDLEUSDT", "XMRUSDT", "ALGOUSDT", "CRVUSDT", "TIAUSDT", "RENDERUSDT", "INJUSDT", "JUPUSDT", "FETUSDT", "APEUSDT", "SEIUSDT", "ATOMUSDT", "LDOUSDT"]
+    default: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "BNBUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "BCHUSDT", "AVAXUSDT", "NEARUSDT", "AAVEUSDT", "WLDUSDT", "XPLUSDT", "XLMUSDT", "TRUMPUSDT", "MUSDT", "INJUSDT", "SEIUSDT", "PEPEUSDT", "SHIBUSDT"]
+    options: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "BNBUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "BCHUSDT", "AVAXUSDT", "NEARUSDT", "AAVEUSDT", "WLDUSDT", "XPLUSDT", "XLMUSDT", "TRUMPUSDT", "MUSDT", "INJUSDT", "SEIUSDT", "PEPEUSDT", "SHIBUSDT"]
     min_items: 1
-    max_items: 66
+    max_items: 28
     label: "Scan universe (USDT perpetuals; first constructive name is the regime gate)"
   leverage:
     type: integer
@@ -171,7 +171,7 @@ user_config_schema:
     type: integer
     default: 66
     min: 5
-    max: 66
+    max: 28
     label: "Symbols scanned per pass"
   min_score:
     type: integer
