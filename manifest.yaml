@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.5.0"
+version: "0.5.1"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -113,8 +113,9 @@ strategy_config:
   # When on, a crypto name extended past max_vwap_ext_pct that is riding a strong
   # aligned higher-TF trend at the session extreme is entered at MARKET (not a
   # pullback limit it could never fill), with a tight structure stop. See
-  # docs/DESIGN_v0.5.0.md.
-  breakout_enabled: false
+  # docs/DESIGN_v0.5.0.md. v0.5.1: enabled by default + exposed as a subscriber
+  # toggle so the crypto breakout path runs live (was off-by-default in v0.5.0).
+  breakout_enabled: true
   breakout_trend_min: "0.6"        # min kline trend_strength [0,1] to confirm
   breakout_extreme_band: "0.015"   # must be within 1.5% of the 24h extreme
   breakout_stop_atr_mult: "1.0"    # structure-stop volatility floor in ATRs
@@ -201,4 +202,8 @@ user_config_schema:
     type: string
     default: "4.0"
     pattern: "^[0-9]+(\\.[0-9]+)?$"
-    label: "Max distance from VWAP to enter (%; skips overextended momentum movers the limit can't fill)"
+    label: "Max distance from VWAP to enter (%; beyond this a strong-trend crypto name is a breakout, not a pullback)"
+  breakout_enabled:
+    type: boolean
+    default: true
+    label: "Breakout entries (crypto): market-enter strong trends extended past the VWAP cap, with a tight structure stop"
