@@ -657,20 +657,33 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     except Exception as exc:
         return {"placed": False, "reason": "tpsl_error:" + _exc_brief(exc)}
 
-    opener = trade.contract.open_short_limit if side == "short" else trade.contract.open_long_limit
+    # v0.5.0: a breakout enters at MARKET the cycle it is confirmed (the SDK has no
+    # native stop/trigger entry), so it never rests as a limit and is never subject
+    # to the chase guard or limit-expiry. A pullback rests a limit at entry_price.
+    entry_mode = str(plan.get("entry_mode", "pullback"))
     try:
-        result = opener(
-            symbol=symbol, qty=qty_plan.qty, price=entry_price, leverage=leverage,
-            tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
-        )
+        if entry_mode == "breakout":
+            mopener = (trade.contract.open_short_market if side == "short"
+                       else trade.contract.open_long_market)
+            result = mopener(
+                symbol=symbol, qty=qty_plan.qty, leverage=leverage,
+                tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
+            )
+        else:
+            opener = (trade.contract.open_short_limit if side == "short"
+                      else trade.contract.open_long_limit)
+            result = opener(
+                symbol=symbol, qty=qty_plan.qty, price=entry_price, leverage=leverage,
+                tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
+            )
     except Exception as exc:
         return {"placed": False, "reason": "open_raise:" + _exc_brief(exc),
-                "symbol": symbol, "side": side,
+                "symbol": symbol, "side": side, "entry_mode": entry_mode,
                 "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price)}
 
     placed = bool(trade.is_success(result))
     out = {
-        "placed": placed, "symbol": symbol, "side": side,
+        "placed": placed, "symbol": symbol, "side": side, "entry_mode": entry_mode,
         "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price),
         "tp1": str(tpsl.tp_trigger_price), "sl": str(tpsl.sl_trigger_price),
     }

@@ -33,6 +33,7 @@ class Scored:
     features: SymbolFeatures
     size_factor: float = 1.0   # carried from the candidate's universe regime
     universe: str = ""         # which universe (leader) produced this candidate
+    entry_mode: str = "pullback"  # v0.5.0: "pullback" (limit) or "breakout" (market)
 
 
 def regime(btc: SymbolFeatures, taker_ratio: Optional[float], cfg: dict) -> Regime:
@@ -74,9 +75,16 @@ def _minmax(values: list) -> tuple:
     return (min(values), max(values))
 
 
-def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: str) -> list:
+def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: str,
+                   allow_breakout: bool = False) -> list:
     """Score every coin for ``direction`` ("long"/"short"; "none" falls back to
-    long scores for board visibility). Returns Scored rows sorted best-first."""
+    long scores for board visibility). Returns Scored rows sorted best-first.
+
+    v0.5.0: when ``allow_breakout`` is set (master switch on AND this is a
+    breakout-eligible universe), a name extended past ``max_vwap_ext_pct`` on the
+    entry side is NOT skipped -- it is tagged ``entry_mode="breakout"`` so it keeps
+    its momentum score and competes; pass-2 ``enrich_score`` then confirms the
+    trend or demotes it. With the switch off, behavior is unchanged (hard skip)."""
     side = "short" if direction == "short" else "long"
     ok = [f for f in feats_list if f.ok]
     btc_change = btc.change_pct if (btc.ok and btc.change_pct is not None) else 0.0
@@ -100,6 +108,7 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
         dims: dict = {}
         skip = False
         reason = ""
+        entry_mode = "pullback"
 
         # Momentum 0-25: long rewards strength, short rewards weakness.
         r = rel.get(f.symbol)
@@ -132,10 +141,17 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
             ext = (f.last - f.vwap) / f.vwap  # > 0 = above VWAP
             dims["vwap_ext_pct"] = round(ext * 100.0, 3)
             if not skip and max_ext_pct > 0:
-                if side == "long" and ext > max_ext_pct:
-                    skip, reason = True, "overextended_above_vwap"
-                elif side == "short" and ext < -max_ext_pct:
-                    skip, reason = True, "overextended_below_vwap"
+                over = ((side == "long" and ext > max_ext_pct)
+                        or (side == "short" and ext < -max_ext_pct))
+                if over:
+                    if allow_breakout:
+                        # v0.5.0: route to the breakout path instead of discarding.
+                        entry_mode = "breakout"
+                        dims["breakout_eligible"] = True
+                    else:
+                        reason = ("overextended_above_vwap" if side == "long"
+                                  else "overextended_below_vwap")
+                        skip = True
 
         # Range position 0-20.
         span = (f.high - f.low) if (f.high is not None and f.low is not None) else 0.0
@@ -190,7 +206,8 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
 
         total = momentum + vwap_score + range_score + orderbook_score + volume_score
         dims["total"] = round(total, 2)
-        results.append(Scored(f.symbol, side, total, dims, skip, reason, f))
+        results.append(Scored(f.symbol, side, total, dims, skip, reason, f,
+                              entry_mode=entry_mode))
 
     results.sort(key=lambda s: (not s.skip, s.score), reverse=True)
     return results
@@ -215,6 +232,25 @@ def enrich_score(scored: Scored, feats: SymbolFeatures, cfg: dict) -> tuple:
         trend_adj = sign * trend_weight * max(0.0, min(feats.trend_strength, 1.0))
     extra["trend_dir"] = feats.trend_dir
     extra["trend_adj"] = round(trend_adj, 2)
+
+    # --- v0.5.0 breakout confirmation: a breakout-tagged candidate is only real if
+    # the higher-TF trend is strong AND aligned AND price sits at the session
+    # extreme. Otherwise it is just an overextended blip -> demote to no-trade.
+    if scored.entry_mode == "breakout" and not skip:
+        trend_min = float(cfg.get("breakout_trend_min", "0.6"))
+        band = float(cfg.get("breakout_extreme_band", "0.015"))
+        aligned = bool(feats.kline_ok and feats.trend_dir == side
+                       and feats.trend_strength >= trend_min)
+        near_extreme = False
+        if feats.last is not None and feats.high is not None and feats.low is not None:
+            if side == "long" and feats.high > 0:
+                near_extreme = feats.last >= feats.high * (1.0 - band)
+            elif side == "short" and feats.low > 0:
+                near_extreme = feats.last <= feats.low * (1.0 + band)
+        extra["breakout_aligned"] = aligned
+        extra["breakout_near_extreme"] = near_extreme
+        if not (aligned and near_extreme):
+            skip, reason = True, "breakout_unconfirmed"
 
     # --- funding: skip into a crowded extreme, soft-penalize milder adverse funding
     funding_penalty = 0.0

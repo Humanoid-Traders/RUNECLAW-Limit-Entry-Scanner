@@ -101,7 +101,12 @@ def _scan_universe(uni: dict, cfg: dict) -> dict:
     min_score = float(cfg.get("min_score", 70))
     candidates = [s for s in uni["symbols"] if s != leader_sym][: max(max_scan, 0)]
     feats = [features.fetch_symbol(s) for s in candidates]
-    scored = scoring.score_universe(feats, leader_feats, ucfg, scan_direction)
+    # v0.5.0: breakout entries are gated to crypto only at first (deepest 24/7
+    # books); equities/metals perps gap on session boundaries and slip more on a
+    # market entry, so they stay pullback-only until that behavior is understood.
+    allow_breakout = bool(cfg.get("breakout_enabled", False)) and uni["name"] == "crypto"
+    scored = scoring.score_universe(feats, leader_feats, ucfg, scan_direction,
+                                    allow_breakout=allow_breakout)
     for s in scored:
         s.universe = uni["name"]
         s.size_factor = reg.size_factor
@@ -206,7 +211,8 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         return watch(top_symbol, "no_setup_after_enrichment", {"tradable_candidates": 0})
 
     best = enriched[0]
-    plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side)
+    plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side,
+                           entry_mode=best.entry_mode)
     if plan is None or not plan.sizing_ok:
         return watch(best.symbol, "sizing_failed", {"tradable_candidates": len(enriched)})
 
@@ -217,9 +223,13 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     # the price already fetched for this candidate; no pending-order query needed,
     # so it is immune to the management-layer parse bug. The chase-guard remains a
     # backstop for orders that drift stale AFTER a fillable placement.
+    # v0.5.0: only the pullback path rests a limit that can land too far from
+    # price. A breakout enters at market by design (it IS extended past VWAP), so
+    # the staleness skip must not veto it.
     chase_pct = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
     cur = best.features.last
-    if chase_pct > 0 and cur and cur > 0 and plan.entry and plan.entry > 0:
+    if (plan.entry_mode != "breakout" and chase_pct > 0 and cur and cur > 0
+            and plan.entry and plan.entry > 0):
         gap = ((plan.entry - cur) / plan.entry) if plan.side == "short" else ((cur - plan.entry) / plan.entry)
         if gap > chase_pct:
             return watch(best.symbol, "entry_too_far_{:.1f}pct".format(gap * 100.0),
@@ -229,6 +239,7 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     metrics.update({
         "tradable_candidates": len(enriched),
         "side": plan.side,
+        "entry_mode": plan.entry_mode,
         "limit_price": plan.entry,
         "sl_price": plan.sl_price,
         "sl_pct": round(plan.sl_pct * 100.0, 3),
@@ -272,7 +283,7 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "meta": meta,
         "plan": {
             "side": plan.side, "entry": plan.entry, "sl_price": plan.sl_price,
-            "tp1": plan.tp1, "tp2": plan.tp2,
+            "tp1": plan.tp1, "tp2": plan.tp2, "entry_mode": plan.entry_mode,
             "margin_usdt": plan.margin_usdt, "notional_usdt": plan.notional_usdt,
         },
     }
@@ -337,7 +348,11 @@ def run() -> None:
     called = bool(captured.get("called"))
     placed = captured.get("placed")
     full_reason = str(captured.get("reason", "")) or "none"
+    # v0.5.0: a placed breakout market entry shows c{c}pB (vs p1 for a pullback
+    # limit), so a momentum entry is unmistakable on the compact line.
     pcode = "1" if placed is True else ("0" if placed is False else "X")
+    if placed is True and str(captured.get("entry_mode", "")) == "breakout":
+        pcode = "B"
     emc = {"follow_trade": "F", "signal_only": "S"}.get(exec_mode, "?")
     own = mgmt.get("open_count", 0)
     pT = mgmt.get("pending_total", "?")

@@ -32,6 +32,7 @@ class TradePlan:
     size_factor: float
     sizing_ok: bool
     note: str = ""
+    entry_mode: str = "pullback"  # v0.5.0: "pullback" (limit) or "breakout" (market)
 
 
 def _sl_min_fraction(symbol: str, cfg: dict) -> float:
@@ -42,7 +43,8 @@ def _sl_min_fraction(symbol: str, cfg: dict) -> float:
     return float(cfg.get("sl_min_alt_pct", "2.5")) / 100.0
 
 
-def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str = "long") -> Optional[TradePlan]:
+def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str = "long",
+               entry_mode: str = "pullback") -> Optional[TradePlan]:
     if not feats.ok or feats.high is None or feats.low is None or feats.vwap is None:
         return None
 
@@ -60,7 +62,35 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
     be_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
     sl_min = _sl_min_fraction(feats.symbol, cfg)
 
-    if side == "short":
+    if entry_mode == "breakout":
+        # v0.5.0: enter at market (entry ~= last); the stop hugs the broken level
+        # (24h high for a long, low for a short) widened to at least an ATR so a
+        # clean breakout isn't wicked out, and floored at the per-symbol sl_min.
+        if feats.last is None or feats.last <= 0:
+            return None
+        entry = feats.last
+        buf = float(cfg.get("breakout_level_buffer_pct", "0.2")) / 100.0
+        stop_atr_mult = float(cfg.get("breakout_stop_atr_mult", "1.0"))
+        bk_tp1_pct = float(cfg.get("breakout_tp1_pct", "4.0")) / 100.0
+        if side == "short":
+            struct_stop = low * (1.0 + buf)            # just above the broken 24h low
+            vol_stop = entry + stop_atr_mult * atr
+            raw_stop = max(struct_stop, vol_stop)      # wider (higher) of the two
+            sl_pct = max((raw_stop - entry) / entry, sl_min)
+            sl_price = entry * (1.0 + sl_pct)
+            tp1 = entry * (1.0 - bk_tp1_pct)
+            tp2 = entry * (1.0 - tp2_pct)
+            breakeven_price = entry * (1.0 - be_pct)
+        else:
+            struct_stop = high * (1.0 - buf)           # just below the broken 24h high
+            vol_stop = entry - stop_atr_mult * atr
+            raw_stop = min(struct_stop, vol_stop)      # wider (lower) of the two
+            sl_pct = max((entry - raw_stop) / entry, sl_min)
+            sl_price = entry * (1.0 - sl_pct)
+            tp1 = entry * (1.0 + bk_tp1_pct)
+            tp2 = entry * (1.0 + tp2_pct)
+            breakeven_price = entry * (1.0 + be_pct)
+    elif side == "short":
         entry = vwap + atr_mult * atr
         if entry <= 0:
             return None
@@ -81,7 +111,7 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
         tp2 = entry * (1.0 + tp2_pct)
         breakeven_price = entry * (1.0 + be_pct)
 
-    if sl_pct <= 0 or tp1 <= 0:
+    if entry <= 0 or sl_pct <= 0 or tp1 <= 0:
         return None
 
     max_loss = float(cfg.get("max_loss_usdt", "15"))
@@ -113,4 +143,5 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
         size_factor=size_factor,
         sizing_ok=(notional > 0 and margin > 0),
         note=note,
+        entry_mode=entry_mode,
     )

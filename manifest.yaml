@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.4.3"
+version: "0.5.0"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -109,6 +109,17 @@ strategy_config:
   funding_window: 8
   funding_skip_bps: "30"
   funding_penalty_weight: "8.0"
+  # v0.5.0 — momentum/breakout entry path (OFF by default; flip per instance).
+  # When on, a crypto name extended past max_vwap_ext_pct that is riding a strong
+  # aligned higher-TF trend at the session extreme is entered at MARKET (not a
+  # pullback limit it could never fill), with a tight structure stop. See
+  # docs/DESIGN_v0.5.0.md.
+  breakout_enabled: false
+  breakout_trend_min: "0.6"        # min kline trend_strength [0,1] to confirm
+  breakout_extreme_band: "0.015"   # must be within 1.5% of the 24h extreme
+  breakout_stop_atr_mult: "1.0"    # structure-stop volatility floor in ATRs
+  breakout_level_buffer_pct: "0.2" # stop sits this % beyond the broken level
+  breakout_tp1_pct: "4.0"          # wider first target than the pullback tp1
   # v0.3.0 — multi-universe scanning; each universe gates on its own leader.
   # A universe with no 'symbols' inherits the trading_symbols list above.
   universes:
