@@ -108,6 +108,71 @@ def _time_key_probe(record: Any) -> str:
     return "none"
 
 
+def _find_open_time_value(record: Any, depth: int = 0) -> Any:
+    """First present, non-empty open-time value, returned RAW (uncoerced),
+    recursing into the usual envelope wrappers. Mirrors ``_find_number``'s
+    traversal but keeps the original value so a non-epoch shape (e.g. an ISO-8601
+    string) survives to ``_to_epoch_ms`` instead of being dropped by a premature
+    ``float()``. (v0.4.3)"""
+    if depth > 4:
+        return None
+    mapping = _to_mapping(record)
+    if mapping is not None:
+        for k in _OPEN_TIME_KEYS:
+            if k in mapping and mapping[k] not in (None, ""):
+                return mapping[k]
+        for nk in ("data", "result", "list", "assets", "account"):
+            if nk in mapping:
+                v = _find_open_time_value(mapping[nk], depth + 1)
+                if v is not None:
+                    return v
+    elif isinstance(record, (list, tuple)):
+        for item in record:
+            v = _find_open_time_value(item, depth + 1)
+            if v is not None:
+                return v
+    return None
+
+
+def _to_epoch_ms(value: Any) -> Optional[float]:
+    """Coerce an order open-time to epoch milliseconds. Accepts epoch ms, epoch
+    seconds, a numeric string, an ISO-8601 string (optionally ``Z``-suffixed), or a
+    ``datetime``. Returns None when nothing usable.
+
+    v0.4.3 root cause: live on GetClaw Classic the pending-order ``create_time``
+    came back as a non-epoch value, so the old ``float()``-only lookup returned
+    None, the 4h expiry never computed an age, and the order rested indefinitely
+    (the v0.4.2 ``xpd.no_ts:has:create_time`` contradiction: key present, value
+    unparseable)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.timestamp() * 1000.0
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        n = None
+    if n is not None:
+        if n <= 0:
+            return None
+        # < 1e11 is implausible as epoch-ms (year 1973) but normal as epoch-s,
+        # so treat it as seconds and scale up; otherwise it is already ms.
+        return n * 1000.0 if n < 1e11 else n
+    if isinstance(value, str):
+        s = value.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp() * 1000.0
+    return None
+
+
 def _result_reason(result: Any) -> str:
     """Compact exchange rejection reason from a non-success trade envelope.
 
@@ -445,8 +510,12 @@ def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: l
         if not symbol or not order_id:
             continue
 
-        # 1) Time-based expiry.
-        created = _find_number(record, _OPEN_TIME_KEYS)
+        # 1) Time-based expiry. v0.4.3: read the open-time value RAW, then coerce
+        # any shape (epoch ms/s, numeric string, ISO-8601, datetime) to epoch ms.
+        # The old float()-only lookup returned None for the live ISO create_time,
+        # so age was never computed and the order rested past 4h untouched.
+        raw_ct = _find_open_time_value(record)
+        created = _to_epoch_ms(raw_ct)
         if created and created > 0:
             age_h = (now_ms - created) / 3_600_000.0
             if status is not None:
@@ -460,16 +529,19 @@ def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: l
                     actions.append({"limit_expiry_cancel": symbol, "age_h": round(age_h, 2)})
                     continue
                 except Exception as exc:
-                    # Timestamp WAS readable and the order IS over-age, but the cancel
+                    # Timestamp parsed and the order IS over-age, but the cancel
                     # API rejected -- surface the cause instead of silently chasing.
                     if status is not None:
                         status["expiry_diag"] = ("cxl_err:" + _exc_brief(exc))[:30]
         elif status is not None:
-            # No parseable open-time on this owned order -> the bot can NEVER
-            # time-expire it. Probe which key (if any) the SDK exposed so the fix
-            # is adding one name to _OPEN_TIME_KEYS. (root-causes the v0.4.x Classic
-            # expiry no-op observed live: 5h+ rest, oP1, act0, no cancel.)
-            status["expiry_diag"] = ("no_ts:" + _time_key_probe(record))[:30]
+            # Still no usable open-time. Distinguish "no key at all" (no_ts:<probe>)
+            # from "key present but value uncoercible" (bad_ts:<type>:<value>) so any
+            # residual shape names itself instead of hiding.
+            if raw_ct in (None, ""):
+                status["expiry_diag"] = ("no_ts:" + _time_key_probe(record))[:30]
+            else:
+                status["expiry_diag"] = (
+                    "bad_ts:" + type(raw_ct).__name__ + ":" + str(raw_ct))[:30]
 
         # 2) Price-distance "left behind" cancel: the market has run past the
         # entry by more than limit_chase_pct in the un-fillable direction, so the
