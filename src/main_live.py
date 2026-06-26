@@ -354,6 +354,10 @@ def run() -> None:
     rshort = full_reason.replace(" ", "_")[:32]
     pshape = str(mgmt.get("pending_shape", ""))[:30]
     preason = str(mgmt.get("pending_reason", ""))[:24]
+    # v0.4.2: a stuck owned-pending order that should have time-expired but did not
+    # (no parseable open-time, or the cancel API rejected). This is the silent
+    # failure that left a limit resting 5h+ on Classic with act0 and no cancel.
+    xpd = str(mgmt.get("expiry_diag", ""))[:26]
     # Tail priority (v0.3.1). Three cases, in order:
     #   1. act.<type>      -- a management action fired this cycle (stale_limit_cancel,
     #      limit_expiry_cancel, circuit_cancel, time_stop_close, auto_be, ...)
@@ -362,6 +366,12 @@ def run() -> None:
     # The full envelope shape is preserved in metrics (pending_shape) for deep debug.
     if acts and act_label:
         tail = "act." + act_label[:28]
+    elif xpd:
+        # Surface the stuck-expiry diagnostic over the scan reason: an order the bot
+        # cannot time-expire is more urgent than why nothing was placed. (xpd and
+        # perr are mutually exclusive in practice -- xpd needs an owned pending to
+        # exist, perr fires only when pT==0.) Full scan reason stays in metrics.
+        tail = "xpd." + xpd
     elif str(pT) == "0" and preason:
         tail = "perr." + preason
     else:
@@ -376,6 +386,8 @@ def run() -> None:
                  "mgmt_actions": mgmt.get("actions", []), "mgmt_error": merr,
                  "pending_reason": mgmt.get("pending_reason", ""),
                  "pending_shape": mgmt.get("pending_shape", ""),
+                 "expiry_diag": mgmt.get("expiry_diag", ""),
+                 "pending_max_age_h": mgmt.get("pending_max_age_h"),
                  "state_runs": mgmt.get("state_runs"),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},

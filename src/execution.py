@@ -90,6 +90,24 @@ def _find_string(record: dict, keys: tuple) -> str:
     return ""
 
 
+def _time_key_probe(record: Any) -> str:
+    """Diagnose why an order's open-time may be unreadable. Returns the first known
+    time key present (``has:<key>``), else the first time-ish key the SDK exposed
+    (``alt:<key>`` -- a renamed field we can simply add to ``_OPEN_TIME_KEYS``),
+    else ``none``. This is what turns a silent limit-expiry no-op into a one-line
+    fix: on Classic the 4H expiry never fired because the SDK pending-order record
+    shape was never confirmed to carry a key we look for. (v0.4.2)"""
+    mapping = _to_mapping(record) or {}
+    for k in _OPEN_TIME_KEYS:
+        if k in mapping and mapping[k] not in (None, ""):
+            return "has:" + k
+    for k in mapping.keys():
+        ks = str(k).lower()
+        if "time" in ks or ks == "ts" or ks.endswith("ts"):
+            return "alt:" + str(k)[:14]
+    return "none"
+
+
 def _result_reason(result: Any) -> str:
     """Compact exchange rejection reason from a non-success trade envelope.
 
@@ -325,7 +343,7 @@ def manage_open_state(cfg: dict) -> dict:
         return status
 
     _best_effort_position_controls(cfg, owned_position_records, status, actions)
-    _best_effort_limit_expiry(cfg, owned_pending_records, actions)
+    _best_effort_limit_expiry(cfg, owned_pending_records, actions, status)
     return status
 
 
@@ -410,7 +428,8 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
         pass
 
 
-def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: list) -> None:
+def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: list,
+                              status: Optional[dict] = None) -> None:
     """Cancel ONLY RUNECLAW-sized stale resting limits -- either past the time
     budget (``limit_expiry_hours``) OR left behind when price ran more than
     ``limit_chase_pct`` past the entry in the direction the limit can never fill
@@ -430,13 +449,27 @@ def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: l
         created = _find_number(record, _OPEN_TIME_KEYS)
         if created and created > 0:
             age_h = (now_ms - created) / 3_600_000.0
+            if status is not None:
+                # Track the oldest owned order's age so a stuck (un-expired) limit
+                # is visible in the DBG even when it did not trip the cancel.
+                if age_h > (status.get("pending_max_age_h") or 0.0):
+                    status["pending_max_age_h"] = round(age_h, 2)
             if max_age_h <= age_h <= 240:
                 try:
                     trade.contract.cancel_order(symbol=symbol, order_id=order_id)
                     actions.append({"limit_expiry_cancel": symbol, "age_h": round(age_h, 2)})
                     continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Timestamp WAS readable and the order IS over-age, but the cancel
+                    # API rejected -- surface the cause instead of silently chasing.
+                    if status is not None:
+                        status["expiry_diag"] = ("cxl_err:" + _exc_brief(exc))[:30]
+        elif status is not None:
+            # No parseable open-time on this owned order -> the bot can NEVER
+            # time-expire it. Probe which key (if any) the SDK exposed so the fix
+            # is adding one name to _OPEN_TIME_KEYS. (root-causes the v0.4.x Classic
+            # expiry no-op observed live: 5h+ rest, oP1, act0, no cancel.)
+            status["expiry_diag"] = ("no_ts:" + _time_key_probe(record))[:30]
 
         # 2) Price-distance "left behind" cancel: the market has run past the
         # entry by more than limit_chase_pct in the un-fillable direction, so the
