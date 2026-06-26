@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.3.0"
+version: "0.3.1"
 description: "Live two-sided perpetual-futures scanner that ranks a configurable universe behind a market-regime gate and places pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided scanner for USDT-margined perpetual futures that aims
@@ -116,9 +116,13 @@ strategy_config:
   universes:
     - name: "crypto"
       leader: "BTCUSDT"
+    # v0.3.1: pruned to silver-only. Gold leads/gates; Pt/Pd/Cu were always
+    # below min_volume_usdt ($10M) on Bitget -> permanently thin-skipped, so they
+    # were dead weight (wasted scan calls). Silver (~$257M/24h) is the one liquid
+    # metal candidate. Effective metals leg = "trade silver, gated by gold."
     - name: "metals"
       leader: "XAUUSDT"
-      symbols: ["XAUUSDT", "XAGUSDT", "XPTUSDT", "XPDUSDT", "COPPERUSDT"]
+      symbols: ["XAGUSDT"]
 
 user_config_schema:
   trading_symbols:

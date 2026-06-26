@@ -315,7 +315,9 @@ Default `strategy_config.universes`:
 | Universe | Leader | Symbols |
 |---|---|---|
 | `crypto` | `BTCUSDT` | the 66-symbol `trading_symbols` list (inherited) |
-| `metals` | `XAUUSDT` (gold) | `XAUUSDT, XAGUSDT, XPTUSDT, XPDUSDT, COPPERUSDT` |
+| `metals` | `XAUUSDT` (gold) | `XAGUSDT` (silver) — *v0.3.1: Pt/Pd/Cu pruned (always below `min_volume_usdt`)* |
+
+> **v0.3.1 notes:** the metals universe is pruned to **silver-only** — gold leads/gates, silver (~$257M/24h) is the one liquid metal candidate; platinum/palladium/copper sit permanently below the $10M volume floor so they were dead weight. Also, the DBG **tail now surfaces a fired management action** as `act.<type>` (e.g. `act.stale_limit_cancel`, `act.limit_expiry_cancel`) instead of a bare `act{N}` with a `none` tail — so chase/expiry/circuit/TP verdicts are unambiguous on the DBG line itself.
 
 Each universe resolves its **own** regime from its leader (gold gates the metals class; BTC gates crypto), scores its symbols for that direction, and contributes qualified candidates to a merged pool. Pass-2 enrichment, the caps, and the final pick operate on the pool — so one cycle can short metals while it longs crypto. A universe with no `symbols` inherits `trading_symbols`; with no `universes` config at all, the scanner falls back to the legacy single BTC universe (fully backward-compatible).
 

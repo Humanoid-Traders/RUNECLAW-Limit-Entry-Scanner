@@ -342,20 +342,27 @@ def run() -> None:
     own = mgmt.get("open_count", 0)
     pT = mgmt.get("pending_total", "?")
     oP = mgmt.get("owned_pending", "?")
-    acts = len(mgmt.get("actions", []) or [])
+    mgmt_actions = mgmt.get("actions", []) or []
+    acts = len(mgmt_actions)
+    # v0.3.1: each action is {"<type>": symbol, ...}; surface the first action's
+    # type so a fired chase/expiry/circuit/TP shows WHAT happened in the tail,
+    # not just a bare act{N} (the verdict ambiguity hit live twice on 0.3.0).
+    act_label = ""
+    if mgmt_actions and isinstance(mgmt_actions[0], dict) and mgmt_actions[0]:
+        act_label = str(next(iter(mgmt_actions[0].keys())))
     merr = str(mgmt.get("mgmt_error") or mgmt.get("position_query_error") or "ok")[:16]
     rshort = full_reason.replace(" ", "_")[:32]
     pshape = str(mgmt.get("pending_shape", ""))[:30]
     preason = str(mgmt.get("pending_reason", ""))[:24]
-    # Tail, finalized (v0.1.20). Diagnostics are complete: the pending read path is
-    # confirmed working live and pT0 is simply a flat / just-placed book, so the old
-    # `shp.<envelope-keys>` empty-book dump is retired -- it was pure noise that read
-    # as an error (misdiagnosed 3x). Two cases remain, in priority order:
-    #   1. perr.<code:msg> -- the pending fetch genuinely FAILED (actionable error)
-    #   2. <reason>        -- why nothing was placed / what was decided, untruncated:
-    #      none, correlation_budget, entry_already_pending, stale_limit_cancel, ...
+    # Tail priority (v0.3.1). Three cases, in order:
+    #   1. act.<type>      -- a management action fired this cycle (stale_limit_cancel,
+    #      limit_expiry_cancel, circuit_cancel, time_stop_close, auto_be, ...)
+    #   2. perr.<code:msg> -- the pending fetch genuinely FAILED (actionable error)
+    #   3. <reason>        -- why nothing was placed / what was decided, untruncated
     # The full envelope shape is preserved in metrics (pending_shape) for deep debug.
-    if str(pT) == "0" and preason:
+    if acts and act_label:
+        tail = "act." + act_label[:28]
+    elif str(pT) == "0" and preason:
         tail = "perr." + preason
     else:
         tail = rshort
