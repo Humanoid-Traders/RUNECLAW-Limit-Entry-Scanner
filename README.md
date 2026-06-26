@@ -314,7 +314,7 @@ Default `strategy_config.universes` (**v0.4.0 — three asset classes**):
 
 | Universe | Leader | Candidates |
 |---|---|---|
-| `crypto` | `BTCUSDT` | the 66-symbol `trading_symbols` list (inherited) |
+| `crypto` | `BTCUSDT` | the 28-symbol liquid `trading_symbols` list (inherited) |
 | `equities` | `QQQUSDT` (Nasdaq proxy) | `TSLAUSDT, NVDAUSDT, MSTRUSDT` |
 | `metals` | `XAUUSDT` (gold) | `XAGUSDT` (silver) |
 
