@@ -1,16 +1,23 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.3.1"
-description: "Live two-sided perpetual-futures scanner that ranks a configurable universe behind a market-regime gate and places pullback limit longs or shorts with portfolio-level risk controls"
+version: "0.4.0"
+description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
-  RUNECLAW is a two-sided scanner for USDT-margined perpetual futures that aims
-  to trade with the prevailing regime rather than against it. The thesis is that
-  the cleanest intraday entries come from assets already moving in the leader's
-  direction, positioned in the favorable part of their recent range, supported by
-  real resting demand on the side it wants to trade. Before any candidate is
-  considered, the strategy reads the market leader's regime; when that backdrop is
-  weak or mixed it stands aside entirely and opens nothing, treating capital
-  preservation as the first job.
+  RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
+  futures that aims to trade with the prevailing regime rather than against it.
+  It scans three asset classes in parallel — crypto, equities (RWA US stock
+  perps), and commodities (precious metals) — and each class is gated by its own
+  market-regime leader: BTC for crypto, the Nasdaq proxy QQQ for equities, and
+  gold for commodities.
+  The thesis is that the cleanest intraday entries come from assets already moving
+  in their leader's direction, positioned in the favorable part of their recent
+  range, supported by real resting demand on the side it wants to trade. Before
+  any candidate is considered, the strategy reads that class's regime; when the
+  backdrop is weak or mixed it stands aside for that class and opens nothing,
+  treating capital preservation as the first job. Each class's qualified
+  candidates are merged into one pool, so a single cycle can, for example, short
+  equities while it longs crypto — subject to the portfolio concurrency and
+  correlation caps.
 
   When the leader is constructive the scanner looks for longs; when the leader is
   clearly weak it looks for shorts. Either way it ranks the configured universe
@@ -123,6 +130,14 @@ strategy_config:
     - name: "metals"
       leader: "XAUUSDT"
       symbols: ["XAGUSDT"]
+    # v0.4.0: equities (RWA US stock perps), gated by the Nasdaq proxy QQQ.
+    # Only liquid names kept (>= min_volume_usdt $10M): QQQ leads/gates; TSLA,
+    # NVDA, MSTR are candidates. SPX/AAPL/MSFT/AMZN/GOOGL/META/COIN were below
+    # the volume floor -> excluded. NOTE: stock perps track underlying equities
+    # that gap on session boundaries; off-hours liquidity is thinner than crypto.
+    - name: "equities"
+      leader: "QQQUSDT"
+      symbols: ["TSLAUSDT", "NVDAUSDT", "MSTRUSDT"]
 
 user_config_schema:
   trading_symbols:
