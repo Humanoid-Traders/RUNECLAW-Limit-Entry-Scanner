@@ -110,15 +110,20 @@ def trend_4h(kl4, ts_ms, lookback, norm):
     return features._ema_trend(_dictify(win), lookback, norm)
 
 
-def simulate(cfg, symbols, days, use_breakout):
+def fetch_all(symbols, days):
+    """Fetch 1h+4h klines once; reuse across a parameter sweep."""
     leader = "BTCUSDT"
-    gran_bars = days * 24
-    need = gran_bars + 30
+    need = days * 24 + 30
     allsyms = set(symbols + [leader])
     print(f"fetching {len(allsyms)} symbols x ~{need} 1h + 4h bars ...")
     kl = {s: fetch_klines(s, "1H", min(need, 1000)) for s in allsyms}
     kl4 = {s: fetch_klines(s, "4H", 400) for s in allsyms}
-    kl = {s: b for s, b in kl.items() if len(b) >= 25}
+    return {s: b for s, b in kl.items() if len(b) >= 25}, kl4
+
+
+def simulate(cfg, symbols, days, use_breakout, data=None):
+    leader = "BTCUSDT"
+    kl, kl4 = data if data is not None else fetch_all(symbols, days)
     if leader not in kl:
         print("no leader data; abort"); return
     syms = [s for s in symbols if s in kl and s != leader]
@@ -195,10 +200,12 @@ def simulate(cfg, symbols, days, use_breakout):
             j = min(fill_i + tstop, n - 1); exit_px, exit_reason = fwd[j][4], "time_stop"
         in_trade_until = j
         r = ((exit_px - fill_px) / fill_px) if long else ((fill_px - exit_px) / fill_px)
+        fee = float(cfg.get("fee_pct", "0")) / 100.0  # round-turn taker fee, % of notional
         trades.append({"sym": best.symbol, "side": plan.side, "mode": plan.entry_mode,
-                       "ret_pct": round(r * 100, 3), "reason": exit_reason})
+                       "ret_pct": round((r - 2 * fee) * 100, 3), "reason": exit_reason})
 
     report(use_breakout, n_sig, n_chase, trades)
+    return {"n_sig": n_sig, "n_chase": n_chase, "trades": trades}
 
 
 def report(use_breakout, n_sig, n_chase, trades):
