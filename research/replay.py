@@ -96,12 +96,28 @@ def recon_features(symbol, win):
               change_pct=chg, quote_volume=sum(qvols), bid_volume=None, ask_volume=None)
 
 
+def _dictify(bars):
+    """[ts,o,h,l,c,bv,qv] -> dict bars with the keys _wilder_atr/_ema_trend expect
+    (they use _bar_f on dict keys; raw list bars silently yield None/neutral)."""
+    return [{"timestamp": b[0], "open": b[1], "high": b[2], "low": b[3],
+             "close": b[4], "baseVolume": b[5], "quoteVolume": b[6]} for b in bars]
+
+
+def trend_4h(kl4, ts_ms, lookback, norm):
+    """EMA trend on the trailing 4h bars up to ts_ms -- matches live trend_interval
+    (the replay base is 1h, but enrich computes trend on 4h)."""
+    win = [b for b in kl4 if b[0] <= ts_ms][-(lookback + 5):]
+    return features._ema_trend(_dictify(win), lookback, norm)
+
+
 def simulate(cfg, symbols, days, use_breakout):
     leader = "BTCUSDT"
     gran_bars = days * 24
     need = gran_bars + 30
-    print(f"fetching {len(symbols)+1} symbols x ~{need} 1h bars ...")
-    kl = {s: fetch_klines(s, "1H", min(need, 1000)) for s in set(symbols + [leader])}
+    allsyms = set(symbols + [leader])
+    print(f"fetching {len(allsyms)} symbols x ~{need} 1h + 4h bars ...")
+    kl = {s: fetch_klines(s, "1H", min(need, 1000)) for s in allsyms}
+    kl4 = {s: fetch_klines(s, "4H", 400) for s in allsyms}
     kl = {s: b for s, b in kl.items() if len(b) >= 25}
     if leader not in kl:
         print("no leader data; abort"); return
@@ -132,10 +148,11 @@ def simulate(cfg, symbols, days, use_breakout):
             continue
         best = qual[0]
         # cheap enrich: real Wilder ATR + EMA trend from the same klines
-        bars1h = kl[best.symbol][max(0, i - 30):i + 1]
+        bars1h = _dictify(kl[best.symbol][max(0, i - 30):i + 1])
         best.features.atr = features._wilder_atr(bars1h, int(cfg.get("atr_period", 14)))
         best.features.kline_ok = best.features.atr is not None
-        td, ts = features._ema_trend(bars1h, int(cfg.get("trend_lookback", 12)), float(cfg.get("trend_norm", "0.05")))
+        td, ts = trend_4h(kl4.get(best.symbol, []), kl[best.symbol][i][0],
+                          int(cfg.get("trend_lookback", 12)), float(cfg.get("trend_norm", "0.05")))
         best.features.trend_dir, best.features.trend_strength = td, ts
         _, extra, eskip, ereason = scoring.enrich_score(best, best.features, cfg)
         if eskip:
