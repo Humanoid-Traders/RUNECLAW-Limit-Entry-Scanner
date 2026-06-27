@@ -146,6 +146,12 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         best = qual[0]
         if _enrich(best, kl, kl4, i, cfg):
             continue
+        # AlphaAgent-style vol-regime gate: stand aside outside [vol_floor, vol_ceiling]
+        vlo = float(cfg.get("vol_floor", "0")); vhi = float(cfg.get("vol_ceiling", "99999"))
+        if vlo > 0 or vhi < 99999:
+            rv = R.realized_vol(kl[best.symbol][max(0, i - 31):i + 1], int(cfg.get("vol_lookback", 30)))
+            if rv is not None and (rv < vlo or rv > vhi):
+                continue
         plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side, entry_mode=best.entry_mode)
         if plan is None or not plan.sizing_ok:
             continue
