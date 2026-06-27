@@ -443,38 +443,64 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
     be_trigger_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
     now_ms = _now_ms()
 
+    # v0.6.1 exit-path observability: record each managed position's state every
+    # cycle (age, uPnL, move%, whether breakeven is armed, and whether the open-time
+    # even parsed) so the never-yet-observed exit machinery is visible when a fill
+    # finally runs -- the position analogue of the xpd limit-expiry diagnostic.
+    diags = []
     for record in records:
         symbol = _find_string(record, ("symbol",))
         hold_side = _find_string(record, _HOLD_SIDE_KEYS)
         if not symbol or not hold_side:
             continue
 
+        diag = {"sym": symbol, "side": hold_side.lower()}
+
         # Intraday time-stop (best effort: requires a parseable open time).
-        open_ms = _find_number(record, _OPEN_TIME_KEYS)
-        if open_ms is not None and open_ms > 0:
-            age_h = (now_ms - open_ms) / 3_600_000.0
-            if 0 < age_h <= 240 and age_h >= max_age_h:
-                try:
-                    trade.contract.close_position(symbol=symbol, hold_side=hold_side)
-                    actions.append({"time_stop_close": symbol, "age_h": round(age_h, 2)})
-                    status["controls_active"]["time_stop"] = True
-                    continue
-                except Exception:
-                    pass
+        # v0.6.1: coerce any open-time shape (ISO string / epoch s / ms / datetime)
+        # to epoch ms -- same fix as the limit-expiry path (v0.4.3). The old
+        # float()-only lookup returned None for the live ISO create_time, so the
+        # position time-stop silently never fired.
+        open_ms = _to_epoch_ms(_find_open_time_value(record))
+        age_h = (now_ms - open_ms) / 3_600_000.0 if (open_ms and open_ms > 0) else None
+        diag["age_h"] = round(age_h, 2) if age_h is not None else None
+        diag["ts_ok"] = age_h is not None  # False => open-time unreadable (time-stop blind)
+        if age_h is not None and 0 < age_h <= 240 and age_h >= max_age_h:
+            try:
+                trade.contract.close_position(symbol=symbol, hold_side=hold_side)
+                actions.append({"time_stop_close": symbol, "age_h": round(age_h, 2)})
+                status["controls_active"]["time_stop"] = True
+                diag["acted"] = "time_stop_close"
+                diags.append(diag)
+                continue
+            except Exception as exc:
+                diag["ts_err"] = _exc_brief(exc)[:24]
 
         # Auto-breakeven (best effort: requires entry price + current price).
         entry = _find_number(record, _ENTRY_PRICE_KEYS)
         upnl = _find_number(record, _UPNL_KEYS)
+        diag["upnl"] = round(upnl, 4) if upnl is not None else None
         if entry is None or entry <= 0:
+            diag["note"] = "no_entry_price"
+            diags.append(diag)
             continue
         try:
             current = float(trade.helpers.contract_price(symbol))
         except Exception:
+            diag["note"] = "no_current_price"
+            diags.append(diag)
             continue
         is_long = hold_side.lower() in ("long", "buy")
         move_pct = (current - entry) / entry if is_long else (entry - current) / entry
-        if move_pct >= be_trigger_pct or (upnl is not None and upnl >= be_trigger_usdt):
+        diag["move_pct"] = round(move_pct * 100.0, 3)
+        be_armed = (move_pct >= be_trigger_pct or (upnl is not None and upnl >= be_trigger_usdt))
+        diag["be_armed"] = be_armed
+        if be_armed:
             _move_stop_to_breakeven(symbol, entry, actions, status)
+            diag["acted"] = "auto_be"
+        diags.append(diag)
+
+    status["position_diag"] = diags
 
 
 def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: dict) -> None:

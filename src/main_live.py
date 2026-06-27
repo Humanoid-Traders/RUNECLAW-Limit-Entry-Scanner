@@ -412,6 +412,7 @@ def run() -> None:
                  "pending_shape": mgmt.get("pending_shape", ""),
                  "expiry_diag": mgmt.get("expiry_diag", ""),
                  "pending_max_age_h": mgmt.get("pending_max_age_h"),
+                 "position_diag": mgmt.get("position_diag", []),
                  "state_runs": mgmt.get("state_runs"),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
