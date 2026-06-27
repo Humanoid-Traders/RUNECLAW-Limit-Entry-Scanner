@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.5.0"
+version: "0.6.1"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -113,8 +113,9 @@ strategy_config:
   # When on, a crypto name extended past max_vwap_ext_pct that is riding a strong
   # aligned higher-TF trend at the session extreme is entered at MARKET (not a
   # pullback limit it could never fill), with a tight structure stop. See
-  # docs/DESIGN_v0.5.0.md.
-  breakout_enabled: false
+  # docs/DESIGN_v0.5.0.md. v0.5.1: enabled by default + exposed as a subscriber
+  # toggle so the crypto breakout path runs live (was off-by-default in v0.5.0).
+  breakout_enabled: true
   breakout_trend_min: "0.6"        # min kline trend_strength [0,1] to confirm
   breakout_extreme_band: "0.015"   # must be within 1.5% of the 24h extreme
   breakout_stop_atr_mult: "1.0"    # structure-stop volatility floor in ATRs
@@ -122,9 +123,12 @@ strategy_config:
   breakout_tp1_pct: "4.0"          # wider first target than the pullback tp1
   # v0.3.0 — multi-universe scanning; each universe gates on its own leader.
   # A universe with no 'symbols' inherits the trading_symbols list above.
+  # v0.6.0 — breakout is now per-universe (was hard-wired to crypto). A universe
+  # opts in with breakout: true; `overrides` tunes pass-1 keys for that class.
   universes:
     - name: "crypto"
       leader: "BTCUSDT"
+      breakout: true
     # v0.3.1: pruned to silver-only. Gold leads/gates; Pt/Pd/Cu were always
     # below min_volume_usdt ($10M) on Bitget -> permanently thin-skipped, so they
     # were dead weight (wasted scan calls). Silver (~$257M/24h) is the one liquid
@@ -137,9 +141,17 @@ strategy_config:
     # NVDA, MSTR are candidates. SPX/AAPL/MSFT/AMZN/GOOGL/META/COIN were below
     # the volume floor -> excluded. NOTE: stock perps track underlying equities
     # that gap on session boundaries; off-hours liquidity is thinner than crypto.
+    # v0.6.0: equities opt into breakout. They trend (MSTR chase-cancelled twice
+    # into a clean down-move the pullback-short could not catch) but move less than
+    # crypto, so the breakout routing trigger is lowered to 2.5% extension (vs the
+    # crypto 4%) via a per-universe override. Market-entry slippage on these thinner
+    # books is watched; set breakout: false here to revert if it is bad.
     - name: "equities"
       leader: "QQQUSDT"
       symbols: ["TSLAUSDT", "NVDAUSDT", "MSTRUSDT"]
+      breakout: true
+      overrides:
+        max_vwap_ext_pct: "2.5"
 
 user_config_schema:
   trading_symbols:
@@ -201,4 +213,8 @@ user_config_schema:
     type: string
     default: "4.0"
     pattern: "^[0-9]+(\\.[0-9]+)?$"
-    label: "Max distance from VWAP to enter (%; skips overextended momentum movers the limit can't fill)"
+    label: "Max distance from VWAP to enter (%; beyond this a strong-trend crypto name is a breakout, not a pullback)"
+  breakout_enabled:
+    type: boolean
+    default: true
+    label: "Breakout entries (crypto): market-enter strong trends extended past the VWAP cap, with a tight structure stop"
