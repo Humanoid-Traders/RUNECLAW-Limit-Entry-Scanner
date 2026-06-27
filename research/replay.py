@@ -186,16 +186,33 @@ def simulate(cfg, symbols, days, use_breakout, data=None):
             if fill_i is None:
                 continue  # expired or chased, no trade
 
-        # --- exit: SL / TP1 / time-stop, bar by bar ---
+        # --- exit: bar by bar. exit_mode "fixed" = SL/TP1/time-stop (current
+        # behaviour); "trail" = ratchet the stop trail_atr_mult*ATR below the
+        # high-water mark (no fixed TP) so winners run -> tests the trailing stop
+        # the description claims but the code never implemented. ---
+        exit_mode = str(cfg.get("exit_mode", "fixed"))
+        tmult = float(cfg.get("trail_atr_mult", "1.0"))
+        atrv = plan.atr or 0.0
         exit_px = exit_reason = None
+        trail = plan.sl_price; hw = fill_px
         for j in range(fill_i + 1, min(fill_i + 1 + tstop, n)):
             lo, hi = fwd[j][3], fwd[j][2]
-            if long:
-                if lo <= plan.sl_price: exit_px, exit_reason = plan.sl_price, "sl"; break
-                if hi >= plan.tp1: exit_px, exit_reason = plan.tp1, "tp1"; break
+            if exit_mode == "trail":
+                if long:
+                    if lo <= trail:
+                        exit_px, exit_reason = trail, ("trail" if trail > plan.sl_price else "sl"); break
+                    hw = max(hw, hi); trail = max(trail, hw - tmult * atrv)
+                else:
+                    if hi >= trail:
+                        exit_px, exit_reason = trail, ("trail" if trail < plan.sl_price else "sl"); break
+                    hw = min(hw, lo); trail = min(trail, hw + tmult * atrv)
             else:
-                if hi >= plan.sl_price: exit_px, exit_reason = plan.sl_price, "sl"; break
-                if lo <= plan.tp1: exit_px, exit_reason = plan.tp1, "tp1"; break
+                if long:
+                    if lo <= plan.sl_price: exit_px, exit_reason = plan.sl_price, "sl"; break
+                    if hi >= plan.tp1: exit_px, exit_reason = plan.tp1, "tp1"; break
+                else:
+                    if hi >= plan.sl_price: exit_px, exit_reason = plan.sl_price, "sl"; break
+                    if lo <= plan.tp1: exit_px, exit_reason = plan.tp1, "tp1"; break
         if exit_px is None:
             j = min(fill_i + tstop, n - 1); exit_px, exit_reason = fwd[j][4], "time_stop"
         in_trade_until = j

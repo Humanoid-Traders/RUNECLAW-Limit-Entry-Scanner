@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.6.1"
+version: "0.6.2"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -74,9 +74,9 @@ strategy_config:
   min_score: 70
   conditional_score: 50
   min_volume_usdt: "10000000"
-  atr_limit_mult: "0.5"
+  atr_limit_mult: "0.3"
   max_vwap_ext_pct: "4.0"
-  tp1_pct: "3.5"
+  tp1_pct: "5.0"
   tp2_pct: "7.0"
   trail_atr_mult: "1.0"
   breakeven_pct: "2.0"
@@ -120,7 +120,7 @@ strategy_config:
   breakout_extreme_band: "0.015"   # must be within 1.5% of the 24h extreme
   breakout_stop_atr_mult: "1.0"    # structure-stop volatility floor in ATRs
   breakout_level_buffer_pct: "0.2" # stop sits this % beyond the broken level
-  breakout_tp1_pct: "4.0"          # wider first target than the pullback tp1
+  breakout_tp1_pct: "4.0"          # breakout first target (independent of pullback tp1)
   # v0.3.0 — multi-universe scanning; each universe gates on its own leader.
   # A universe with no 'symbols' inherits the trading_symbols list above.
   # v0.6.0 — breakout is now per-universe (was hard-wired to crypto). A universe
@@ -205,7 +205,7 @@ user_config_schema:
     label: "Max concurrent open positions"
   atr_limit_mult:
     type: number
-    default: 0.5
+    default: 0.3
     min: 0.1
     max: 1.5
     label: "Limit-entry depth (x ATR from VWAP; lower fills sooner)"
