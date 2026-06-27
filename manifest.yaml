@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.6.3"
+version: "0.6.4"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -70,6 +70,17 @@ strategy_config:
   leverage: 10
   margin_budget: "100"
   max_loss_usdt: "15"
+  # v0.6.4 -- margin mode for new opens. "crossed" (default) keeps the proven
+  # open_* wrapper path (the SDK wrappers cannot set margin_mode, so they always
+  # inherit place_order's 'crossed' default -- which is why every prior position
+  # was cross-margined despite older docs claiming isolated). "isolated" routes
+  # opens through place_order(margin_mode='isolated'); it is fail-closed (a wrong
+  # hedge mapping rejects rather than placing a wrong-direction trade) but UNTESTED
+  # on this account, so trial it in signal_only / tiny size first. See
+  # docs/DESIGN_v0.6.4.md. Per-trade loss is bounded by the exchange SL + max_loss
+  # regardless of this setting; isolated additionally caps gap-through-stop loss to
+  # the position's own margin instead of whole-account equity.
+  margin_mode: "crossed"
   max_scan_symbols: 28
   min_score: 70
   conditional_score: 50
@@ -223,3 +234,8 @@ user_config_schema:
     type: boolean
     default: true
     label: "Breakout entries (crypto): market-enter strong trends extended past the VWAP cap, with a tight structure stop"
+  margin_mode:
+    type: string
+    default: "crossed"
+    pattern: "^(crossed|isolated)$"
+    label: "Margin mode for new opens (crossed = proven default; isolated = trial-gated, see DESIGN_v0.6.4)"

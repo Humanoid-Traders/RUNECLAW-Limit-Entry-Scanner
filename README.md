@@ -39,7 +39,7 @@ Only names clearing `min_score: 70` become candidates. Entry is a resting limit 
 | Circuit breaker (pause) | $30 USDT daily loss | `circuit_pause_usdt: 30` |
 | Circuit breaker (stop) | $40 USDT daily loss | `circuit_stop_usdt: 40` |
 | Size-scoping cap | $1,050 USDT notional | `size_scope_mult: 1.5 × margin_budget`; agent ignores positions above this cap |
-| Isolated margin | Yes | Code-enforced by design; subaccount API keys, no withdrawal scope |
+| Margin mode | Crossed (default); isolated opt-in (v0.6.4) | The composite `open_*` SDK wrappers cannot set `margin_mode` and inherit the `crossed` default, so opens are cross-margined unless `margin_mode: isolated` routes them through `place_order` (trial-gated, see `docs/DESIGN_v0.6.4.md`). Per-trade loss is bounded by the exchange SL + `max_loss` regardless of mode. Subaccount API keys, no withdrawal scope. |
 
 **Size-scoping:** Any position with notional above `size_scope_mult × margin_budget` ($1,050 at current config) is excluded from ownership. The agent carries `own=0` on those positions and never touches them. This prevents the agent from accidentally managing manually-placed or externally-sourced trades.
 
