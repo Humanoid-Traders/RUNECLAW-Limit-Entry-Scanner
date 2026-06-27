@@ -77,14 +77,20 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             b = kl[p["sym"]][i]; lo, hi, c = b[3], b[2], b[4]
             long = p["side"] == "long"; ex = None
             if exit_mode == "trail":
+                # v0.6.3 live-faithful: a wide TP2 backstop is attached at entry,
+                # the ratcheting trail does the rest.
                 if long:
                     if lo <= p["trail"]:
                         ex = (p["trail"], "trail" if p["trail"] > p["sl"] else "sl")
+                    elif hi >= p["tp2"]:
+                        ex = (p["tp2"], "tp2")
                     else:
                         p["hw"] = max(p["hw"], hi); p["trail"] = max(p["trail"], p["hw"] - tmult * p["atr"])
                 else:
                     if hi >= p["trail"]:
                         ex = (p["trail"], "trail" if p["trail"] < p["sl"] else "sl")
+                    elif lo <= p["tp2"]:
+                        ex = (p["tp2"], "tp2")
                     else:
                         p["hw"] = min(p["hw"], lo); p["trail"] = min(p["trail"], p["hw"] + tmult * p["atr"])
             else:
@@ -110,7 +116,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             if lo <= q["entry"] <= hi:
                 pl = q["plan"]; n_fill += 1
                 opens.append({"sym": q["sym"], "side": q["side"], "mode": "pullback",
-                              "fill_px": q["entry"], "sl": pl.sl_price, "tp1": pl.tp1,
+                              "fill_px": q["entry"], "sl": pl.sl_price, "tp1": pl.tp1, "tp2": pl.tp2,
                               "atr": pl.atr or 0.0, "fill_i": i, "hw": q["entry"], "trail": pl.sl_price})
                 continue
             run = ((c - q["entry"]) / q["entry"]) if long else ((q["entry"] - c) / q["entry"])
@@ -146,7 +152,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         n_sig += 1
         if plan.entry_mode == "breakout":
             opens.append({"sym": best.symbol, "side": best.side, "mode": "breakout",
-                          "fill_px": best.features.last, "sl": plan.sl_price, "tp1": plan.tp1,
+                          "fill_px": best.features.last, "sl": plan.sl_price, "tp1": plan.tp1, "tp2": plan.tp2,
                           "atr": plan.atr or 0.0, "fill_i": i, "hw": best.features.last, "trail": plan.sl_price})
         else:
             cur = best.features.last

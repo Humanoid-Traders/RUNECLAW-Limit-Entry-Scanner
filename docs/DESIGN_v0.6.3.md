@@ -1,6 +1,16 @@
-# RUNECLAW v0.6.3 — Trailing-Stop Exit (Design / NOT yet implemented)
+# RUNECLAW v0.6.3 — Trailing-Stop Exit (IMPLEMENTED, published; trial in signal_only)
 
-**Status:** design only. Validated in the multi-position research replay; **not implemented** — the live-exit rewrite has real unknowns (below) and touches stops on live money, so it needs a careful, tested build + a `signal_only` trial, not a rushed ship.
+**Status:** implemented + published (`version_id 4ad76c01…`). **Live instance stays on v0.6.2** until trialed in `signal_only` (or tiny-size follow_trade) — the live-exit rewrite is built safe-by-construction (below) but rests on approximate-sim evidence, so it earns a careful live read before normal size.
+
+**Validation caught a real trap — the backstop width.** The first pass attached a tight tp2 (7%) backstop, which *capped the trail's winners* and erased the edge (lost to breakout-fixed in 2 of 3 samples). Re-validating live-faithfully across backstop widths showed the trail only pays with a WIDE backstop:
+
+| sample (3-slot) | breakout-fixed | trail + 7% backstop | trail + **15% backstop** |
+|---|---|---|---|
+| MAJORS 21d | +1.4% | +11.3% | **+12.3%** |
+| MOVERS 28d | +44.0% | +16.7% (capped!) | **+56.1%** |
+| MIXED 35d | +36.4% | +28.0% | +32.5% |
+
+So the shipped config is `trail_atr_mult 2.0`, `time_stop_hours 12`, **`tp2_pct 15.0`** (wide backstop). The trail beats pullback-only in all 3 samples and breakout-fixed in 2 of 3, and is *consistently* positive where breakout-fixed swings −13.6%..+44%.
 
 ---
 

@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 from getagent import trade
 
+from . import features  # v0.6.3: recompute ATR at manage-time for the trailing stop
+
 _STATE_DIR = Path("/workspace/.state")
 _STATE_FILE = _STATE_DIR / "runeclaw_scanner.json"
 
@@ -39,6 +41,8 @@ _ENTRY_PRICE_KEYS = ("openPriceAvg", "averageOpenPrice", "average_open_price",
 _UPNL_KEYS = ("unrealizedPL", "unrealized_pnl", "unrealizedPnl", "upl", "uplValue")
 _SIZE_KEYS = ("total", "size", "holdSize", "available", "openDelegateSize")
 _HOLD_SIDE_KEYS = ("holdSide", "hold_side", "side")
+_TRIGGER_KEYS = ("triggerPrice", "trigger_price", "slTriggerPrice", "sl_trigger_price",
+                 "presetStopLossPrice", "price", "executePrice")
 _EQUITY_KEYS = ("usdtEquity", "accountEquity", "totalEquity", "equity",
                 "usdt_equity", "totalAmount", "accountValue", "unifiedTotalEquity")
 
@@ -495,7 +499,14 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
         diag["move_pct"] = round(move_pct * 100.0, 3)
         be_armed = (move_pct >= be_trigger_pct or (upnl is not None and upnl >= be_trigger_usdt))
         diag["be_armed"] = be_armed
-        if be_armed:
+        # v0.6.3: ratchet a trailing stop (strictly additive, fail-safe no-op) --
+        # it subsumes auto-breakeven (the trail crosses entry as price runs). With
+        # trail_atr_mult <= 0 the trail is disabled and the old breakeven-only
+        # behaviour applies.
+        if float(cfg.get("trail_atr_mult", "1.0")) > 0:
+            if _trail_stop(symbol, hold_side, current, cfg, actions, status):
+                diag["acted"] = "trail_stop"
+        elif be_armed:
             _move_stop_to_breakeven(symbol, entry, actions, status)
             diag["acted"] = "auto_be"
         diags.append(diag)
@@ -517,6 +528,59 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
         status["controls_active"]["auto_be"] = True
     except Exception:
         pass
+
+
+def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
+                actions: list, status: dict) -> bool:
+    """v0.6.3 trailing stop. Ratchets the position's SL in the protective direction
+    only -- to ``current -/+ trail_atr_mult*ATR`` -- moving it ONLY if that is
+    strictly more protective than the live SL. STRICTLY ADDITIVE and fail-safe:
+    if the ATR, the current price, or the live SL trigger cannot be read, it does
+    NOTHING (the existing fixed SL stays in force). It never cancels, widens, or
+    removes a stop. Stateless -- the exchange SL order is the trail's memory.
+    Returns True iff it moved the stop. (validated in research/replay_mp.py)"""
+    tmult = float(cfg.get("trail_atr_mult", "1.0"))
+    if tmult <= 0 or not current or current <= 0:
+        return False
+    # Recompute ATR live; no ATR -> no trail this cycle (fail-safe).
+    try:
+        period = int(cfg.get("atr_period", 14))
+        bars = features.fetch_klines(symbol, interval=str(cfg.get("kline_interval", "1h")),
+                                     limit=max(period + 5, 30))
+        atr = features._wilder_atr(bars, period) if bars else None
+    except Exception:
+        atr = None
+    if not atr or atr <= 0:
+        return False
+    is_long = hold_side.lower() in ("long", "buy")
+    trail = current - tmult * atr if is_long else current + tmult * atr
+    if trail <= 0:
+        return False
+    # Read the live SL plan order + its trigger. Unreadable -> NEVER blind-set.
+    try:
+        sl = trade.helpers.select_sl_plan_order(trade.contract.plan_pending_orders(symbol=symbol),
+                                                symbol=symbol)
+    except Exception:
+        return False
+    order_id = _find_string(_to_mapping(sl) or {}, ("orderId", "order_id", "clientOid")) \
+        or str(getattr(sl, "order_id", "") or "")
+    cur_sl = _find_number(sl, _TRIGGER_KEYS)
+    if not order_id or cur_sl is None or cur_sl <= 0:
+        return False
+    # Move ONLY in the protective direction, and only on a meaningful (>0.1%) tick
+    # to avoid hammering modify_stop_loss every cycle.
+    improves = (trail > cur_sl) if is_long else (trail < cur_sl)
+    if not improves or abs(trail - cur_sl) < 0.001 * current:
+        return False
+    try:
+        step = getattr(trade.helpers.contract_rules(symbol), "price_step", None)
+        trade.contract.modify_stop_loss(symbol=symbol, order_id=order_id,
+                                        trigger_price=_align(trail, step))
+        actions.append({"trail_stop": symbol, "to": round(trail, 6)})
+        status["controls_active"]["trail"] = True
+        return True
+    except Exception:
+        return False
 
 
 def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: list,
@@ -634,6 +698,10 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     margin = plan.get("margin_usdt")
     if entry is None or sl_price is None or tp1 is None or not margin:
         return {"placed": False, "reason": "incomplete_plan"}
+    # v0.6.3: when the trailing stop is active, attach the WIDER tp2 as a backstop
+    # so the ratcheting trail (not a tight tp1) governs the upside; trail off keeps
+    # tp1 (pre-v0.6.3 behaviour).
+    tp_attach = (plan.get("tp2") or tp1) if float(cfg.get("trail_atr_mult", "1.0")) > 0 else tp1
 
     # Duplicate guard: skip if already in a position or already resting an entry.
     # Best-effort ONLY -- a parse/type error here must never block an entry. The
@@ -661,7 +729,7 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     except Exception:
         step = None
     entry_price = _align(entry, step)
-    tp1_price = _align(tp1, step)
+    tp1_price = _align(tp_attach, step)
     sl_price_aligned = _align(sl_price, step)
 
     try:
