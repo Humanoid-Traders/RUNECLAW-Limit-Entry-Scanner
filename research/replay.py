@@ -96,6 +96,24 @@ def recon_features(symbol, win):
               change_pct=chg, quote_volume=sum(qvols), bid_volume=None, ask_volume=None)
 
 
+def realized_vol(bars, lookback=30, ppy=8760):
+    """Annualized realized vol (%) = std of log returns over the last `lookback`
+    1h bars, x sqrt(periods/yr). ppy=8760 for hourly. None if too few bars.
+    (AlphaAgent-style vol-regime gate: low vol = ranging/mean-revert, high vol =
+    trending; extreme vol = stand aside.)"""
+    import math
+    closes = [b[4] for b in bars[-(lookback + 1):]]
+    if len(closes) < lookback + 1:
+        return None
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))
+            if closes[i - 1] > 0 and closes[i] > 0]
+    if len(rets) < 2:
+        return None
+    m = sum(rets) / len(rets)
+    var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+    return (var ** 0.5) * (ppy ** 0.5) * 100.0
+
+
 def _dictify(bars):
     """[ts,o,h,l,c,bv,qv] -> dict bars with the keys _wilder_atr/_ema_trend expect
     (they use _bar_f on dict keys; raw list bars silently yield None/neutral)."""
