@@ -88,10 +88,17 @@ def _scan_universe(uni: dict, cfg: dict) -> dict:
     """Resolve one universe's regime from its own leader and score its symbols.
     Each candidate is tagged with the universe name and its regime size_factor."""
     leader_sym = uni["leader"]
-    ucfg = cfg
+    # v0.6.0: per-universe config overrides for the pass-1 scan. allow_short
+    # (legacy) plus an optional `overrides` map -- e.g. equities lower
+    # max_vwap_ext_pct so a smaller move routes to breakout. Pass-2 enrichment
+    # runs on the merged pool with global cfg, so only pass-1 keys are tunable here.
+    over = {}
     if uni.get("allow_short") is not None:
-        ucfg = dict(cfg)
-        ucfg["allow_short"] = bool(uni["allow_short"])
+        over["allow_short"] = bool(uni["allow_short"])
+    extra_over = uni.get("overrides")
+    if isinstance(extra_over, dict):
+        over.update(extra_over)
+    ucfg = {**cfg, **over} if over else cfg
     leader_feats = features.fetch_symbol(leader_sym)
     taker = features.taker_buy_ratio(leader_sym)
     reg = scoring.regime(leader_feats, taker, ucfg)
@@ -101,10 +108,12 @@ def _scan_universe(uni: dict, cfg: dict) -> dict:
     min_score = float(cfg.get("min_score", 70))
     candidates = [s for s in uni["symbols"] if s != leader_sym][: max(max_scan, 0)]
     feats = [features.fetch_symbol(s) for s in candidates]
-    # v0.5.0: breakout entries are gated to crypto only at first (deepest 24/7
-    # books); equities/metals perps gap on session boundaries and slip more on a
-    # market entry, so they stay pullback-only until that behavior is understood.
-    allow_breakout = bool(cfg.get("breakout_enabled", False)) and uni["name"] == "crypto"
+    # v0.6.0: breakout is per-universe. A universe opts in with `breakout: true`;
+    # absent the flag it defaults to crypto-only (v0.5.x behavior). Gated by the
+    # global breakout_enabled master switch. (equities now opt in -- they trend too
+    # and the pullback-only path kept chase-cancelling into clean down-moves.)
+    allow_breakout = (bool(cfg.get("breakout_enabled", False))
+                      and bool(uni.get("breakout", uni["name"] == "crypto")))
     scored = scoring.score_universe(feats, leader_feats, ucfg, scan_direction,
                                     allow_breakout=allow_breakout)
     for s in scored:

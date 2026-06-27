@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.5.1"
+version: "0.6.0"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -123,9 +123,12 @@ strategy_config:
   breakout_tp1_pct: "4.0"          # wider first target than the pullback tp1
   # v0.3.0 — multi-universe scanning; each universe gates on its own leader.
   # A universe with no 'symbols' inherits the trading_symbols list above.
+  # v0.6.0 — breakout is now per-universe (was hard-wired to crypto). A universe
+  # opts in with breakout: true; `overrides` tunes pass-1 keys for that class.
   universes:
     - name: "crypto"
       leader: "BTCUSDT"
+      breakout: true
     # v0.3.1: pruned to silver-only. Gold leads/gates; Pt/Pd/Cu were always
     # below min_volume_usdt ($10M) on Bitget -> permanently thin-skipped, so they
     # were dead weight (wasted scan calls). Silver (~$257M/24h) is the one liquid
@@ -138,9 +141,17 @@ strategy_config:
     # NVDA, MSTR are candidates. SPX/AAPL/MSFT/AMZN/GOOGL/META/COIN were below
     # the volume floor -> excluded. NOTE: stock perps track underlying equities
     # that gap on session boundaries; off-hours liquidity is thinner than crypto.
+    # v0.6.0: equities opt into breakout. They trend (MSTR chase-cancelled twice
+    # into a clean down-move the pullback-short could not catch) but move less than
+    # crypto, so the breakout routing trigger is lowered to 2.5% extension (vs the
+    # crypto 4%) via a per-universe override. Market-entry slippage on these thinner
+    # books is watched; set breakout: false here to revert if it is bad.
     - name: "equities"
       leader: "QQQUSDT"
       symbols: ["TSLAUSDT", "NVDAUSDT", "MSTRUSDT"]
+      breakout: true
+      overrides:
+        max_vwap_ext_pct: "2.5"
 
 user_config_schema:
   trading_symbols:
