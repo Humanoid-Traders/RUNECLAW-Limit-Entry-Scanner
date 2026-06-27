@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.6.2"
+version: "0.6.3"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -77,8 +77,13 @@ strategy_config:
   atr_limit_mult: "0.3"
   max_vwap_ext_pct: "4.0"
   tp1_pct: "5.0"
-  tp2_pct: "7.0"
-  trail_atr_mult: "1.0"
+  # v0.6.3 — trailing-stop exit (validated in research/replay_mp.py at 3-slot
+  # concurrency). The manager ratchets the SL to price -/+ trail_atr_mult*ATR
+  # (protective direction only, fail-safe no-op); tp2 is a WIDE backstop so the
+  # trail isn't capped (a tight backstop erased the edge in validation). Longer
+  # time_stop_hours gives the trail room. See docs/DESIGN_v0.6.3.md.
+  tp2_pct: "15.0"
+  trail_atr_mult: "2.0"
   breakeven_pct: "2.0"
   sl_min_btc_eth_pct: "1.5"
   sl_min_sol_bnb_pct: "1.2"
@@ -91,7 +96,7 @@ strategy_config:
   max_correlated_alts: 2
   circuit_pause_usdt: "30"
   circuit_stop_usdt: "40"
-  time_stop_hours: "4"
+  time_stop_hours: "12"
   limit_expiry_hours: "4"
   limit_chase_pct: "3.0"
   size_scope_mult: "1.5"
