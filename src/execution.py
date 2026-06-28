@@ -45,6 +45,10 @@ _TRIGGER_KEYS = ("triggerPrice", "trigger_price", "slTriggerPrice", "sl_trigger_
                  "presetStopLossPrice", "price", "executePrice")
 _EQUITY_KEYS = ("usdtEquity", "accountEquity", "totalEquity", "equity",
                 "usdt_equity", "totalAmount", "accountValue", "unifiedTotalEquity")
+# v0.6.6: per-asset POSITION margin (non-zero iff a position is open, regardless of
+# PnL direction -- unlike unrealizedPL which is ~0 at breakeven, and unlike `locked`
+# which a resting limit also consumes). Used to detect the read-lies-empty blind-spot.
+_POSITION_MARGIN_KEYS = ("crossedMargin", "isolatedMargin")
 
 
 def _to_mapping(value: Any) -> Optional[dict]:
@@ -224,6 +228,39 @@ def _account_equity() -> Optional[float]:
     return _find_number(result, _EQUITY_KEYS)
 
 
+def _account_position_margin() -> Optional[float]:
+    """v0.6.6: total open-position margin (crossed + isolated) summed across the
+    account's contract assets. Non-zero iff a position is open -- the reliable
+    cross-check for the read-lies-empty blind-spot (current_position() returns an
+    empty success while a position is actually live). Returns None if the account
+    snapshot can't be read or carries no margin field, so an unreadable snapshot
+    NEVER triggers state_blind (no false-positive on a genuinely flat account)."""
+    try:
+        result = trade.account.total_value()
+    except Exception:
+        return None
+    mapping = _to_mapping(result)
+    if mapping is None:
+        return None
+    # contract_assets lives under data on the live shape; tolerate a flattened shape.
+    data_map = _to_mapping(mapping.get("data")) if mapping.get("data") is not None else None
+    assets = (data_map or mapping).get("contract_assets")
+    if not isinstance(assets, list):
+        return None
+    total = 0.0
+    found = False
+    for asset in assets:
+        amap = _to_mapping(asset) or {}
+        for key in _POSITION_MARGIN_KEYS:
+            if key in amap:
+                try:
+                    total += abs(float(amap[key]))
+                    found = True
+                except (TypeError, ValueError):
+                    pass
+    return total if found else None
+
+
 def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
@@ -377,6 +414,18 @@ def manage_open_state(cfg: dict) -> dict:
         status["position_query_error"] = type(exc).__name__
         status["state_blind"] = True
         records = []
+    # v0.6.6: blind-spot detector. current_position() can return an empty SUCCESS while
+    # a position is actually open (a flaky trade-bridge "read lie" -- the 12:33 incident:
+    # ETH live, read own0, playbook over-opened on top). The v0.6.5 interlock only catches
+    # read ERRORS, not a successful-but-empty read. Cross-check the account: if positions
+    # read empty but margin is still locked against open positions, treat it as blind so
+    # open_if_allowed refuses to ADD. Fail-open -- unreadable margin -> no block, so a
+    # genuinely flat account (margin 0) is never falsely blinded.
+    if not records and not status.get("state_blind"):
+        pos_margin = _account_position_margin()
+        if pos_margin is not None and pos_margin > 0:
+            status["state_blind"] = True
+            status["blind_reason"] = ("pos_margin_%.4f_vs_empty" % pos_margin)[:32]
     try:
         pending_raw = trade.contract.pending_orders()
     except Exception as exc:
