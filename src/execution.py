@@ -36,8 +36,16 @@ _STATE_FILE = _STATE_DIR / "runeclaw_scanner.json"
 _OPEN_TIME_KEYS = ("cTime", "ctime", "c_time", "create_time", "created_time", "createTime",
                    "createdTime", "openTime", "open_time", "uTime", "u_time", "update_time",
                    "updateTime")
-_ENTRY_PRICE_KEYS = ("openPriceAvg", "averageOpenPrice", "average_open_price",
-                     "avgPrice", "openAvgPrice", "entryPrice", "open_price")
+# v0.6.7: the live position record serialises to snake_case (open_price_avg), but
+# this list (and _record_notional) only carried the camelCase openPriceAvg + the
+# unrelated average_open_price/open_price -- so the entry price read None on every
+# position. That made _record_notional return None -> _runeclaw_sized False ->
+# EVERY position was excluded from ownership -> _best_effort_position_controls never
+# ran -> the trail/time-stop never fired all session (the "frozen SL" was the trail
+# never executing, not modify_err). Carry the snake_case open_price_avg too.
+_ENTRY_PRICE_KEYS = ("openPriceAvg", "open_price_avg", "averageOpenPrice",
+                     "average_open_price", "avgPrice", "avg_price", "openAvgPrice",
+                     "open_avg_price", "entryPrice", "entry_price", "open_price")
 _UPNL_KEYS = ("unrealizedPL", "unrealized_pnl", "unrealizedPnl", "upl", "uplValue")
 _SIZE_KEYS = ("total", "size", "holdSize", "available", "openDelegateSize")
 _HOLD_SIDE_KEYS = ("holdSide", "hold_side", "side")
@@ -300,9 +308,13 @@ def _extract_rows(value: Any, depth: int = 0) -> list:
 
 def _record_notional(record: dict) -> Optional[float]:
     """USDT notional (qty * price) of a live order or position record."""
-    qty = _find_number(record, _SIZE_KEYS + ("qty", "baseVolume"))
-    price = _find_number(record, ("price", "orderPrice", "limitPrice", "executePrice",
-                                  "openPriceAvg", "averageOpenPrice", "avgPrice", "markPrice"))
+    qty = _find_number(record, _SIZE_KEYS + ("qty", "baseVolume", "base_volume"))
+    # v0.6.7: order-price keys first (limit orders), then entry-price (positions, now
+    # incl. snake_case via _ENTRY_PRICE_KEYS), then mark as a last-resort proxy. The
+    # old list lacked the snake position price, so positions sized to None -> excluded.
+    price = _find_number(record, ("price", "orderPrice", "order_price", "limitPrice",
+                                  "limit_price", "executePrice", "execute_price")
+                                 + _ENTRY_PRICE_KEYS + ("markPrice", "mark_price"))
     if qty is None or price is None or qty <= 0 or price <= 0:
         return None
     return qty * price
