@@ -504,7 +504,11 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
         # trail_atr_mult <= 0 the trail is disabled and the old breakeven-only
         # behaviour applies.
         if float(cfg.get("trail_atr_mult", "1.0")) > 0:
-            if _trail_stop(symbol, hold_side, current, cfg, actions, status):
+            # v0.6.4: _trail_stop records WHY it acted / no-op'd into diag["trail"]
+            # (no_atr / no_sl_order / no_sl_trigger / hold:<trail>v<cur> / tick /
+            # modify_err:<msg> / set:<price>) so a silently-inert trail is visible
+            # the way xpd surfaced the silent limit-expiry. See DESIGN_v0.6.4.md.
+            if _trail_stop(symbol, hold_side, current, cfg, actions, status, diag):
                 diag["acted"] = "trail_stop"
         elif be_armed:
             _move_stop_to_breakeven(symbol, entry, actions, status)
@@ -531,56 +535,79 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
 
 
 def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
-                actions: list, status: dict) -> bool:
+                actions: list, status: dict, diag: Optional[dict] = None) -> bool:
     """v0.6.3 trailing stop. Ratchets the position's SL in the protective direction
     only -- to ``current -/+ trail_atr_mult*ATR`` -- moving it ONLY if that is
     strictly more protective than the live SL. STRICTLY ADDITIVE and fail-safe:
     if the ATR, the current price, or the live SL trigger cannot be read, it does
     NOTHING (the existing fixed SL stays in force). It never cancels, widens, or
     removes a stop. Stateless -- the exchange SL order is the trail's memory.
-    Returns True iff it moved the stop. (validated in research/replay_mp.py)"""
+    Returns True iff it moved the stop. (validated in research/replay_mp.py)
+
+    v0.6.4: records a one-token reason into ``diag['trail']`` at every exit so a
+    silently-inert trail is diagnosable (the position analogue of the xpd
+    limit-expiry diag). A bare fail-safe no-op was indistinguishable from a working
+    trail that simply had nothing to do -- this names which it was."""
+    def _why(reason: str) -> bool:  # record the no-op reason, return False
+        if diag is not None:
+            diag["trail"] = reason
+        return False
+
     tmult = float(cfg.get("trail_atr_mult", "1.0"))
     if tmult <= 0 or not current or current <= 0:
-        return False
+        return _why("off")
     # Recompute ATR live; no ATR -> no trail this cycle (fail-safe).
     try:
         period = int(cfg.get("atr_period", 14))
         bars = features.fetch_klines(symbol, interval=str(cfg.get("kline_interval", "1h")),
                                      limit=max(period + 5, 30))
         atr = features._wilder_atr(bars, period) if bars else None
-    except Exception:
-        atr = None
+    except Exception as exc:
+        return _why("atr_err:" + _exc_brief(exc)[:20])
     if not atr or atr <= 0:
-        return False
+        return _why("no_atr")
     is_long = hold_side.lower() in ("long", "buy")
     trail = current - tmult * atr if is_long else current + tmult * atr
     if trail <= 0:
-        return False
+        return _why("no_atr")
     # Read the live SL plan order + its trigger. Unreadable -> NEVER blind-set.
     try:
         sl = trade.helpers.select_sl_plan_order(trade.contract.plan_pending_orders(symbol=symbol),
                                                 symbol=symbol)
-    except Exception:
-        return False
+    except Exception as exc:
+        return _why("sl_err:" + _exc_brief(exc)[:20])
     order_id = _find_string(_to_mapping(sl) or {}, ("orderId", "order_id", "clientOid")) \
         or str(getattr(sl, "order_id", "") or "")
     cur_sl = _find_number(sl, _TRIGGER_KEYS)
-    if not order_id or cur_sl is None or cur_sl <= 0:
-        return False
+    if cur_sl is None:  # attribute fallback (mirror the order_id read above)
+        for _a in ("triggerPrice", "stopLossTriggerPrice", "trigger_price"):
+            try:
+                cur_sl = float(getattr(sl, _a))
+                break
+            except (TypeError, ValueError, AttributeError):
+                continue
+    if not order_id:
+        return _why("no_sl_order")
+    if cur_sl is None or cur_sl <= 0:
+        return _why("no_sl_trigger")
     # Move ONLY in the protective direction, and only on a meaningful (>0.1%) tick
     # to avoid hammering modify_stop_loss every cycle.
     improves = (trail > cur_sl) if is_long else (trail < cur_sl)
-    if not improves or abs(trail - cur_sl) < 0.001 * current:
-        return False
+    if not improves:
+        return _why("hold:%.4f<=%.4f" % (trail, cur_sl))
+    if abs(trail - cur_sl) < 0.001 * current:
+        return _why("tick")
     try:
         step = getattr(trade.helpers.contract_rules(symbol), "price_step", None)
         trade.contract.modify_stop_loss(symbol=symbol, order_id=order_id,
                                         trigger_price=_align(trail, step))
         actions.append({"trail_stop": symbol, "to": round(trail, 6)})
         status["controls_active"]["trail"] = True
+        if diag is not None:
+            diag["trail"] = "set:%.4f" % trail
         return True
-    except Exception:
-        return False
+    except Exception as exc:
+        return _why("modify_err:" + _exc_brief(exc)[:24])
 
 
 def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: list,
