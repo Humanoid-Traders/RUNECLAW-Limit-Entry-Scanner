@@ -102,3 +102,55 @@ else:                           result = open_*_limit(...)     # proven, unchang
 Until then: **`margin_mode` stays `crossed`** (the proven path). The default carries the
 same loss bound (SL + `max_loss`); isolated is defence-in-depth against gap-through-stop,
 earned only after a live read — same discipline as the v0.6.3 trail.
+
+---
+
+## 5. Trail-not-firing investigation + `trail_diag` (also v0.6.4)
+
+**Symptom (live):** the v0.6.3 trailing stop has not ratcheted on either real fill.
+NEAR re-entry: entry $1.8331, mark $1.8907 (+3.14%), SL stuck at the *original* $1.7776
+(`uTime === cTime` on the SL plan order — never modified). The trail should have moved it.
+
+**Proof it should fire** (computed from public Bitget 1h klines via the research harness's
+`fetch_klines` + the real `features._wilder_atr`):
+
+| quantity | value |
+|---|---|
+| NEAR 1h Wilder ATR(14) | 1.81% of mark |
+| `2×ATR` (the trail band) | 3.61% |
+| cushion mark→SL | 5.98% |
+| trail candidate = mark − 2×ATR | **$1.8224 > SL $1.7776** → should ratchet |
+
+**Static analysis eliminated the obvious suspects** (against the live SL plan-order shape):
+- `triggerPrice: "1.7776"` is the FIRST key in `_TRIGGER_KEYS` → the SL read returns 1.7776.
+  Not the bug. (My first hypothesis — the missing attribute fallback — was wrong; hardened
+  anyway, see below.)
+- `openPriceAvg` is the first `_ENTRY_PRICE_KEYS` entry → the position entry reads fine.
+- ATR math says fire. So entry ✓ / current ✓ / SL-trigger ✓ / geometry ✓.
+
+What's left are the two **silent** failure points inside `_trail_stop`: the live ATR
+fetch returning empty, or **`modify_stop_loss` raising** — the latter very plausible given
+the SL confirms `posMode: hedge_mode`. Both were swallowed by bare `return False` / `except`,
+indistinguishable from a working trail with nothing to do.
+
+**Fix = make it speak, then fix precisely.** `_trail_stop` now records a one-token reason
+into `diag["trail"]` at every exit — `off` / `atr_err:…` / `no_atr` / `sl_err:…` /
+`no_sl_order` / `no_sl_trigger` / `hold:<trail><=<cur>` / `tick` / `modify_err:…` /
+`set:<price>`. This is the position analogue of the `xpd` diagnostic that turned the silent
+4H limit-expiry into a one-line fix. On the next deploy the cycle log names exactly where
+the trail dies (almost certainly `modify_err:…` if it's the hedge-mode modify call), and
+*that* error text dictates the real fix (e.g. pass `hold_side`/`pos_side` to the modify).
+Also added a defensive attribute fallback for the `cur_sl` read (mirrors the `order_id`
+read) — harmless robustness, not the root cause.
+
+**Strictly additive / fail-safe preserved:** behaviour is unchanged except for the recorded
+string; the trail still only ratchets protectively and no-ops on any failure. Validated in
+`tests/test_trail_diag.py` (5 tests) — notably `modify_err` is now visible, and the
+attribute-only SL still ratchets.
+
+**Cannot deploy mid-position** (a swap needs a flat book and NEAR is open), so this can't
+diagnose the *current* NEAR — it instruments the *next* fill after a redeploy. Interim
+narrowing without a deploy: pull the live `position_diag` for NEAR — if it carries
+`move_pct`/`be_armed` but no `acted`, the trail is reached and dying inside `_trail_stop`
+(ATR or modify); if it carries `note: no_entry_price`/`no_current_price` or is absent, the
+position isn't reaching the trail at all.
