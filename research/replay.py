@@ -247,7 +247,8 @@ def simulate(cfg, symbols, days, use_breakout, data=None):
                        # v0.7.0 analytics: per-trade lifecycle for MAE/MFE + journal
                        "entry_px": round(fill_px, 8), "exit_px": round(exit_px, 8),
                        "mae_pct": round(mae * 100, 3), "mfe_pct": round(mfe * 100, 3),
-                       "bars": j - fill_i, "regime": reg.direction, "score": round(best.score, 1)})
+                       "bars": j - fill_i, "regime": reg.direction, "score": round(best.score, 1),
+                       "fill_ts": fwd[fill_i][0]})  # v0.7.x: join key for OI/signal overlays
 
     report(use_breakout, n_sig, n_chase, trades)
     return {"n_sig": n_sig, "n_chase": n_chase, "trades": trades}

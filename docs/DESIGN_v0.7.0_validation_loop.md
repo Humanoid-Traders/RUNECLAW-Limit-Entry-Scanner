@@ -97,6 +97,26 @@ window-dependent -> not a confident live change.)
   (with `replay_mp` for anything exit/concurrency-touching) before shipping. No more shipping
   unvalidated features.
 
+## 4a. Phase 3 (signal enrichment) — value-tested, nothing to build (yet)
+
+Before wiring any new signal into scoring, value-test it: annotate each backtest trade with
+the signal at entry, bucket by it, compare expectancy (`research/oi_signal.py` is the
+template — runs the backtest, joins trades to a signal via `fill_ts`, buckets, prints the
+expectancy gap + a BUILD / don't-build verdict).
+
+| candidate signal | backtestable? | result |
+|---|---|---|
+| **Open-interest divergence** | **No** | Bitget has no public OI-history endpoint (404); Binance OI-history is blocked through the proxy. Live SDK has `open_interest_history`, but with no offline data we'd be shipping on faith → **not built.** |
+| **Volume-surge confirmation** (entry vol ≥1.3x trailing 24h) | Yes | **No edge.** 20d: surge +0.27%/trade vs normal +1.17% (surge WORSE — climax/exhaustion, not confirmation); 35d: gap −0.04% (no separation). → **not built.** |
+
+So Phase 3 adds **nothing validated** right now. The reachable (price/volume) signals tested
+don't separate outcomes; the promising ones (OI / liquidations / CVD) are data-gated offline.
+**Net of the whole roadmap: the loop killed the fill-rate fix and the volume signal, corrected
+the trail verdict, and confirmed edge — i.e. it told us what NOT to ship, which is the point.**
+The right next step is to bank LIVE evidence (capture the first real trail fill on v0.6.7, let
+results accrue) rather than ship unvalidated complexity. Unlocking Phase 3 honestly requires
+first adding a backtestable historical-OI/derivatives feed to the harness.
+
 ## 5. Honest limits (unchanged from replay.py)
 
 No order-book dimension (degraded fallback), bar-touch fills (no intrabar path / partials),
