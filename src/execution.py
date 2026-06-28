@@ -361,9 +361,21 @@ def manage_open_state(cfg: dict) -> dict:
     # .state/ does not persist between scheduled runs) ---
     try:
         positions = trade.contract.current_position()
+        # v0.6.5: a non-raising error envelope (live shape {code,message,data,...})
+        # must NOT read as "flat" -- that blinds the open-gate the same way the
+        # pending path was blinded (see below). Probe success; a failed position
+        # query sets state_blind so open_if_allowed refuses new entries.
+        try:
+            positions_ok = bool(trade.is_success(positions))
+        except Exception:
+            positions_ok = True
+        if not positions_ok:
+            status["position_query_reason"] = _result_reason(positions)
+            status["state_blind"] = True
         records = trade.helpers.contract_position_records(positions) or []
     except Exception as exc:
         status["position_query_error"] = type(exc).__name__
+        status["state_blind"] = True
         records = []
     try:
         pending_raw = trade.contract.pending_orders()
@@ -733,6 +745,16 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     side = str(plan.get("side", "long"))
     if not symbol or not plan:
         return {"placed": False, "reason": "incomplete_plan"}
+
+    # v0.6.5: never open on an unreadable book. If manage_open_state could not read
+    # current positions this cycle (state_blind), open_count is unreliable -- a
+    # failed read looks identical to a flat book -- so refuse new entries. This
+    # prevents stacking untracked positions during a trade-bridge outage (the 06:32
+    # `Failed_to_call` incident: the playbook read own0 while holding 2 live legs and
+    # tried to place on top). Existing positions keep their exchange SL/TP; the
+    # playbook simply does not ADD while blind, and resumes when the read recovers.
+    if mgmt.get("state_blind"):
+        return {"placed": False, "reason": "state_blind"}
 
     if mgmt.get("circuit") in ("paused", "tripped"):
         return {"placed": False, "reason": "circuit_" + str(mgmt.get("circuit"))}
