@@ -24,7 +24,7 @@
 
 | Control | Status | Basis |
 |---------|--------|-------|
-| Isolated margin | PASS | Code-enforced by design (`margin_mode=isolated` in executor) |
+| Isolated margin | GAP (corrected v0.6.4) | NOT code-enforced. The prior "`margin_mode=isolated` in executor" claim was inaccurate: the executor opens via the composite `open_*` wrappers, which expose no `margin_mode` and inherit `place_order`'s `crossed` default — so opens are cross-margined. v0.6.4 adds an opt-in isolated path via `place_order(margin_mode='isolated')` (`margin_mode: isolated`), fail-closed and trial-gated. Per-trade loss is bounded by the exchange SL + `max_loss` regardless of margin mode; isolated additionally caps gap-through-stop loss to the position's own margin. |
 | `max_loss` $15 per trade | PASS | Code-enforced by design (config: `max_loss=15`) |
 | TP/SL required on every futures open | PASS | Code-enforced by design (tradesdk tool-level gate; order rejected without plan) |
 | `max_concurrent` 6 | PASS | Code-enforced by design (config: `max_concurrent=6`) |

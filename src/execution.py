@@ -667,6 +667,39 @@ def _exc_brief(exc: Exception) -> str:
     return (msg or type(exc).__name__)[:80]
 
 
+def _open_isolated(side: str, entry_mode: str, symbol: str, qty: Any,
+                   entry_price: Any, leverage: int, tpsl: Any) -> Any:
+    """v0.6.4: open a position with ISOLATED margin via the lower-level
+    ``place_order``. The composite ``open_*`` wrappers do not expose ``margin_mode``
+    and always inherit ``place_order``'s ``crossed`` default, so the only route to
+    isolated margin is to call ``place_order`` directly. This mirrors the wrapper
+    (``change_leverage`` then place the order) but forces ``margin_mode='isolated'``.
+
+    SAFETY -- this path is OPT-IN (``cfg['margin_mode']``, default ``crossed`` keeps
+    the proven wrapper path unchanged) and FAIL-CLOSED. Trade direction is pinned by
+    ``side`` -> buy/sell below, so a wrong hedge-field mapping makes the exchange
+    reject the order (``placed: False``, one skipped entry) rather than ever opening
+    a wrong-direction trade. ``pos_side``/``trade_side`` are set for HEDGE mode
+    (this account's mode -- see the flat-slot note in ``open_if_allowed``); if the
+    account is later confirmed one-way, empty them. Untested offline (the SDK is
+    runner-managed and cannot be imported here) -- trial in ``signal_only`` / tiny
+    size before trusting at normal size. See docs/DESIGN_v0.6.4.md."""
+    is_short = (side == "short")
+    order_side = "sell" if is_short else "buy"
+    pos_side = "short" if is_short else "long"
+    order_type = "market" if entry_mode == "breakout" else "limit"
+    price = "" if entry_mode == "breakout" else entry_price
+    try:
+        trade.contract.change_leverage(symbol=symbol, leverage=leverage)
+    except Exception:
+        pass  # best-effort; place_order still opens at the symbol's set leverage
+    return trade.contract.place_order(
+        symbol=symbol, side=order_side, order_type=order_type, qty=qty,
+        price=price, margin_mode="isolated", pos_side=pos_side, trade_side="open",
+        tp_trigger_price=tpsl.tp_trigger_price, sl_trigger_price=tpsl.sl_trigger_price,
+    )
+
+
 def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     plan = decision.get("plan") or {}
     symbol = str(decision.get("symbol", ""))
@@ -755,8 +788,17 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     # native stop/trigger entry), so it never rests as a limit and is never subject
     # to the chase guard or limit-expiry. A pullback rests a limit at entry_price.
     entry_mode = str(plan.get("entry_mode", "pullback"))
+    # v0.6.4: isolated-margin entry path (OPT-IN; default 'crossed' keeps the
+    # proven open_* wrapper path byte-for-byte unchanged). The wrappers cannot set
+    # margin_mode, so isolated routes through place_order via _open_isolated, which
+    # fails closed on a wrong hedge mapping (never a wrong-direction trade). Trial
+    # in signal_only / tiny size before normal size. See docs/DESIGN_v0.6.4.md.
+    margin_mode = str(cfg.get("margin_mode", "crossed")).lower()
     try:
-        if entry_mode == "breakout":
+        if margin_mode == "isolated":
+            result = _open_isolated(side, entry_mode, symbol, qty_plan.qty,
+                                    entry_price, leverage, tpsl)
+        elif entry_mode == "breakout":
             mopener = (trade.contract.open_short_market if side == "short"
                        else trade.contract.open_long_market)
             result = mopener(
@@ -780,6 +822,7 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
         "placed": placed, "symbol": symbol, "side": side, "entry_mode": entry_mode,
         "qty": str(getattr(qty_plan, "qty", "")), "entry": str(entry_price),
         "tp1": str(tpsl.tp_trigger_price), "sl": str(tpsl.sl_trigger_price),
+        "margin_mode": margin_mode,  # v0.6.4: observable in metrics for the trial
     }
     if not placed:
         # Surface the exchange's own rejection so a fully-sized, fully-guarded
