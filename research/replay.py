@@ -213,8 +213,14 @@ def simulate(cfg, symbols, days, use_breakout, data=None):
         atrv = plan.atr or 0.0
         exit_px = exit_reason = None
         trail = plan.sl_price; hw = fill_px
+        mfe = mae = 0.0  # max favorable / max adverse excursion from fill (fractions)
         for j in range(fill_i + 1, min(fill_i + 1 + tstop, n)):
             lo, hi = fwd[j][3], fwd[j][2]
+            # track excursions from the fill (incl. the exit bar's range)
+            if long:
+                mfe = max(mfe, (hi - fill_px) / fill_px); mae = min(mae, (lo - fill_px) / fill_px)
+            else:
+                mfe = max(mfe, (fill_px - lo) / fill_px); mae = min(mae, (fill_px - hi) / fill_px)
             if exit_mode == "trail":
                 if long:
                     if lo <= trail:
@@ -237,7 +243,11 @@ def simulate(cfg, symbols, days, use_breakout, data=None):
         r = ((exit_px - fill_px) / fill_px) if long else ((fill_px - exit_px) / fill_px)
         fee = float(cfg.get("fee_pct", "0")) / 100.0  # round-turn taker fee, % of notional
         trades.append({"sym": best.symbol, "side": plan.side, "mode": plan.entry_mode,
-                       "ret_pct": round((r - 2 * fee) * 100, 3), "reason": exit_reason})
+                       "ret_pct": round((r - 2 * fee) * 100, 3), "reason": exit_reason,
+                       # v0.7.0 analytics: per-trade lifecycle for MAE/MFE + journal
+                       "entry_px": round(fill_px, 8), "exit_px": round(exit_px, 8),
+                       "mae_pct": round(mae * 100, 3), "mfe_pct": round(mfe * 100, 3),
+                       "bars": j - fill_i, "regime": reg.direction, "score": round(best.score, 1)})
 
     report(use_breakout, n_sig, n_chase, trades)
     return {"n_sig": n_sig, "n_chase": n_chase, "trades": trades}
