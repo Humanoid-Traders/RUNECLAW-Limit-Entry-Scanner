@@ -134,7 +134,9 @@ def test_breaker_off_when_frac_zero():
     cfg = _wire_state([_fill(-500, 2)], frac="0")  # huge loss but breaker disabled
     st = execution.manage_open_state(cfg)
     _assert(not st.get("loss_breaker"), "frac 0 -> breaker off regardless of loss")
-    _assert("realized_window_pnl" not in st, "disabled -> no fills call / no field")
+    _assert("realized_window_pnl" not in st, "breaker disabled -> no realized_window_pnl field")
+    # journal is on by default and reads fills independently of the breaker
+    _assert(st.get("fills_journal"), "journal still emits when breaker is off")
 
 
 def test_breaker_failopen_unreadable_fills():
