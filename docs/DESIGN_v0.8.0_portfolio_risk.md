@@ -88,22 +88,35 @@ account has been running without the brake everyone assumes is on. The realized
 rolling-loss breaker is the **stateless** replacement: it needs no local
 persistence, only the trailing realized P&L, which the **exchange** persists.
 
-## 6. What ships, and the open question for the live port
+## 6. The live port — IMPLEMENTED (stateless, fills-sourced, opt-in)
 
-- **Ships now (this PR): research + tests only.** The breaker model, the tail
-  metrics (maxDD / worst-trade / PF), and 6 network-free tests pinning the math.
-  No `src/**` change — honoring "prove it in `replay_mp` before any deploy."
-- **Next (separate, deploy PR — needs a decision): wire the breaker into
-  `open_if_allowed`.** The one unresolved piece is the **stateless live data
-  source** for "trailing-24h realized P&L." Candidates, in order of preference:
-  1. Exchange **account bills / fill history** filtered to realized-close events in
-     the last 24h (exchange-persisted → no `.state/` dependency). Preferred if the
-     TradeSDK exposes it.
-  2. **Position-history** endpoint summed over 24h (same idea, different surface).
-  3. Fallback: keep the equity-delta breaker but anchor day-start from an
-     exchange-side daily metric rather than `.state/`.
-  Until the SDK surface is confirmed, the live port is held. The *decision* is
-  validated; the *plumbing* is the next step.
+The validated decision is now wired into `src/execution.py`. The stateless data
+source question is resolved: **`trade.contract.fills()`** returns recent contract
+fills carrying realized `profit` and a `cTime` timestamp, both **exchange-persisted**
+— so the trailing-window realized P&L needs no `.state/` (the reason the equity
+breaker is dead).
+
+- **`_trailing_realized_pnl(window_hours)`** — calls `trade.contract.fills(limit=100)`,
+  sums `profit` over fills whose timestamp is inside the window. Key reads are
+  snake/camel tolerant (`_REALIZED_PNL_KEYS`, `_OPEN_TIME_KEYS`) — the v0.6.7 lesson.
+  **Fail-open:** an unreadable/empty fills response returns `None` ⇒ no pause, so a
+  read glitch never blocks trading. This brake only ever *adds* caution.
+- **`manage_open_state`** computes it when `loss_breaker_frac > 0`, sets
+  `status["loss_breaker"]` + `realized_window_pnl`, and emits a `loss_breaker_pause`
+  action (visible in the DBG tail). Threshold = `frac × margin_budget × leverage`
+  (one slot's notional), so `frac = 0.08` ⇒ −$80 at the live 100×10 config — the
+  faithful translation of the backtest's −8%-summed-return setting.
+- **`open_if_allowed`** returns `{placed: False, reason: "loss_breaker"}` while it is
+  active. **Pause only** — it never flattens; open positions keep their exchange SL/TP.
+- **Opt-in, default OFF** (`loss_breaker_frac: "0"`), mirroring the v0.6.4 margin_mode
+  precedent: the proven default is a no-op, and the validated value (0.08 / 24h) is
+  one toggle away in `user_config_schema`. Coverage: `tests/test_loss_breaker.py`
+  (10 tests — sum, window cutoff, snake-case, fail-open, trip/no-trip, the pause).
+
+**Deploy note:** the package change is inert until the operator sets
+`loss_breaker_frac = 0.08` on the instance. Recommended rollout: deploy v0.8.0, then
+enable the breaker (it is harmless in healthy regimes by construction — it never
+fires unless a real 24h realized-loss streak crosses the threshold).
 
 ## 7. Honest limits
 

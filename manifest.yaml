@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.6.7"
+version: "0.8.0"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -32,7 +32,8 @@ long_description: |
   working, and a stop lifted toward breakeven once a trade moves enough in favor.
   A portfolio layer caps concurrent positions, limits correlated exposure,
   expires stale resting orders, applies an intraday time-stop, and halts new
-  entries when the day's running loss breaches a circuit breaker.
+  entries after a fresh losing streak (a stateless realized-loss breaker sourced
+  from exchange fills, so it works without persisted state).
 
   Under the hood it is six cooperating engines run once per cycle — feature
   (one 24h ticker per symbol), regime (gates direction off the leader), scoring
@@ -107,6 +108,16 @@ strategy_config:
   max_correlated_alts: 2
   circuit_pause_usdt: "30"
   circuit_stop_usdt: "40"
+  # v0.8.0 -- stateless realized-loss breaker (the working replacement for the
+  # .state-backed equity circuit breaker above, which is dead in this runtime:
+  # .state/ does not persist, so day_start_equity never round-trips). Pauses NEW
+  # entries when trailing-window realized PnL (summed from exchange fills, no local
+  # state) is at/below loss_breaker_frac * margin_budget * leverage. Validated in
+  # research/replay_mp (DESIGN_v0.8.0): 0.08 over 24h was harmless in healthy
+  # windows (never fired) and cut maxDD ~22% in weak ones. Default 0 = OFF (opt-in,
+  # proven no-op); set frac to 0.08 to enable. Pause only -- never flattens.
+  loss_breaker_frac: "0"
+  loss_breaker_window_hours: "24"
   time_stop_hours: "12"
   limit_expiry_hours: "4"
   limit_chase_pct: "3.0"
@@ -239,3 +250,15 @@ user_config_schema:
     default: "crossed"
     pattern: "^(crossed|isolated)$"
     label: "Margin mode for new opens (crossed = proven default; isolated = trial-gated, see DESIGN_v0.6.4)"
+  loss_breaker_frac:
+    type: number
+    default: 0
+    min: 0
+    max: 0.5
+    label: "Realized-loss breaker: pause new entries after trailing-window realized loss reaches this x one slot's notional (0 = off; 0.08 validated, see DESIGN_v0.8.0)"
+  loss_breaker_window_hours:
+    type: number
+    default: 24
+    min: 1
+    max: 168
+    label: "Realized-loss breaker lookback window (hours)"
