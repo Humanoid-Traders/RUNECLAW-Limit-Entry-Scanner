@@ -142,7 +142,7 @@ def _enrich(best, kl, kl4, i, cfg):
 
 
 def simulate_mp(cfg, symbols, days, use_breakout, data=None):
-    leader = "BTCUSDT"
+    leader = cfg.get("leader", "BTCUSDT")   # v0.9.x: configurable per-universe leader
     kl, kl4 = data if data is not None else R.fetch_all(symbols, days)
     if leader not in kl:
         print("no leader data"); return None
@@ -406,6 +406,8 @@ def main():
                     help="A/B no gate vs a sweep of leader efficiency-ratio floors")
     ap.add_argument("--by-symbol", action="store_true",
                     help="print per-symbol net/trades/avg (edge-concentration audit)")
+    ap.add_argument("--leader", default="BTCUSDT",
+                    help="regime leader for this universe (e.g. XAUUSDT for metals, QQQUSDT for equities)")
     ap.add_argument("--symbols", nargs="*", default=[
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT",
         "LINKUSDT", "AVAXUSDT", "NEARUSDT", "INJUSDT", "SEIUSDT", "TRUMPUSDT", "WLDUSDT"])
@@ -424,11 +426,12 @@ def main():
         "exit_mode": a.exit_mode, "corr_budget": a.corr_budget, "corr_lookback": a.corr_lookback,
         "heat_pause_pct": a.heat_pause,
         "loss_pause_pct": a.loss_pause, "loss_window_bars": a.loss_window,
-        "er_floor": a.er_floor, "er_lookback": a.er_lookback,
+        "er_floor": a.er_floor, "er_lookback": a.er_lookback, "leader": a.leader,
     }
-    data = R.fetch_all(a.symbols, a.days)
-    base = f"breakout={'ON' if a.breakout else 'off'} exit={a.exit_mode} trail={a.trail} " \
-           f"ts={a.time_stop} ({len(a.symbols)}syms {a.days}d, 3-slot)"
+    fetch_syms = list(dict.fromkeys(list(a.symbols) + [a.leader]))  # leader must be fetched too
+    data = R.fetch_all(fetch_syms, a.days)
+    base = f"leader={a.leader} breakout={'ON' if a.breakout else 'off'} exit={a.exit_mode} " \
+           f"trail={a.trail} ts={a.time_stop} ({len(a.symbols)}syms {a.days}d, 3-slot)"
     if a.ab_corr:
         # legacy count cap vs correlation-weighted budgets -- watch maxDD (the tail),
         # not just expectancy: the cap's job is to cut clustered correlated losses.
