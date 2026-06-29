@@ -98,6 +98,26 @@ def _corr_exposure(kl, cand, cside, held, i, look, hedge_credit):
     return cost
 
 
+def _efficiency_ratio(kl, sym, i, look):
+    """Kaufman efficiency ratio of `sym` over the trailing `look` bars:
+    |net move| / sum(|bar-to-bar move|). ~1.0 = clean directional trend,
+    ~0.0 = chop/range (price goes nowhere relative to its own wiggle). One
+    number that separates BOTH no-trade regimes (range + high-vol chop) from
+    tradable trends -- the leader-level gate Part 3's regime table calls for."""
+    s = kl.get(sym)
+    if not s:
+        return None
+    seg = s[max(0, i - look):i + 1]
+    if len(seg) < 6:
+        return None
+    closes = [b[4] for b in seg]
+    net = abs(closes[-1] - closes[0])
+    path = sum(abs(closes[k] - closes[k - 1]) for k in range(1, len(closes)))
+    if path <= 0:
+        return None
+    return net / path
+
+
 def _max_drawdown(seq):
     """Max drawdown of the running cumulative-return curve (loss clustering)."""
     eq = 0.0
@@ -161,11 +181,16 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     # live it must be sourced from exchange-side realized PnL (no local persistence).
     loss_pause = float(cfg.get("loss_pause_pct", "0"))
     loss_window = int(cfg.get("loss_window_bars", 24))
+    # v0.9.0 leader-level chop/range no-trade gate (Part 3 regime classifier): stand
+    # aside when the leader's efficiency ratio is below er_floor (directionless --
+    # range OR high-vol chop). 0 => off.
+    er_floor = float(cfg.get("er_floor", "0"))
+    er_look = int(cfg.get("er_lookback", 12))
 
     opens = []   # {sym, side, mode, fill_px, sl, tp1, atr, fill_i, hw, trail}
     pends = []   # {sym, side, entry, placed_i, plan}
     trades = []; n_sig = 0; n_chase = 0; n_expire = 0; n_fill = 0
-    n_corr_block = 0; n_heat_block = 0; n_loss_block = 0
+    n_corr_block = 0; n_heat_block = 0; n_loss_block = 0; n_chop_block = 0
 
     def close(p, px, why, at):
         long = p["side"] == "long"
@@ -262,6 +287,12 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         reg = scoring.regime(lead, None, cfg)
         if reg.direction not in ("long", "short"):
             continue
+        # v0.9.0 chop/range no-trade gate: skip when the leader is directionless.
+        if er_floor > 0:
+            er = _efficiency_ratio(kl, leader, i, er_look)
+            if er is not None and er < er_floor:
+                n_chop_block += 1
+                continue
         feats = [R.recon_features(s, kl[s][i - 24:i + 1]) for s in syms if s not in owned]
         scored = scoring.score_universe(feats, lead, cfg, reg.direction, allow_breakout=use_breakout)
         qual = [s for s in scored if not s.skip and s.score >= min_score]
@@ -306,7 +337,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
 
     return {"n_sig": n_sig, "n_fill": n_fill, "n_chase": n_chase, "n_expire": n_expire,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
-            "n_loss_block": n_loss_block, "trades": trades, "max_open": max_conc}
+            "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
+            "trades": trades, "max_open": max_conc}
 
 
 def report(tag, st):
@@ -315,7 +347,7 @@ def report(tag, st):
     print(f"  entries placed  : {st['n_sig']}   pullback fills: {st.get('n_fill','?')}   "
           f"chase: {st['n_chase']}   expire: {st['n_expire']}   "
           f"corr-block: {st.get('n_corr_block', 0)}   heat-block: {st.get('n_heat_block', 0)}   "
-          f"loss-block: {st.get('n_loss_block', 0)}")
+          f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}")
     print(f"  trades closed   : {len(t)}  (incl. forced end-of-window closes)")
     if not t:
         return
@@ -335,6 +367,15 @@ def report(tag, st):
     pf = round(gw / gl, 2) if gl > 0 else None
     print(f"  tail      : maxDD {_max_drawdown(seq):+.1f}%  worst-trade {min(seq):+.1f}%  "
           f"PF {pf}  (return-units, exit-ordered)")
+    if st.get("by_symbol"):
+        bys = {}
+        for x in t:
+            bys.setdefault(x["sym"], []).append(x["ret_pct"])
+        rows = sorted(bys.items(), key=lambda kv: sum(kv[1]), reverse=True)
+        print("  by-symbol (net% / trades / avg):")
+        for sym, rs in rows:
+            w = sum(1 for r in rs if r > 0)
+            print(f"    {sym:10} {sum(rs):+7.1f}%  n={len(rs):2}  avg {sum(rs)/len(rs):+.2f}%  win {w/len(rs)*100:3.0f}%")
 
 
 def main():
@@ -358,6 +399,13 @@ def main():
     ap.add_argument("--loss-window", default="24", help="bars in the realized-loss window")
     ap.add_argument("--ab-loss", action="store_true",
                     help="A/B no breaker vs a sweep of realized rolling-loss thresholds")
+    ap.add_argument("--er-floor", default="0",
+                    help="skip entries when leader efficiency ratio < this (0=off)")
+    ap.add_argument("--er-lookback", default="12", help="bars for the efficiency ratio")
+    ap.add_argument("--ab-chop", action="store_true",
+                    help="A/B no gate vs a sweep of leader efficiency-ratio floors")
+    ap.add_argument("--by-symbol", action="store_true",
+                    help="print per-symbol net/trades/avg (edge-concentration audit)")
     ap.add_argument("--symbols", nargs="*", default=[
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT",
         "LINKUSDT", "AVAXUSDT", "NEARUSDT", "INJUSDT", "SEIUSDT", "TRUMPUSDT", "WLDUSDT"])
@@ -376,6 +424,7 @@ def main():
         "exit_mode": a.exit_mode, "corr_budget": a.corr_budget, "corr_lookback": a.corr_lookback,
         "heat_pause_pct": a.heat_pause,
         "loss_pause_pct": a.loss_pause, "loss_window_bars": a.loss_window,
+        "er_floor": a.er_floor, "er_lookback": a.er_lookback,
     }
     data = R.fetch_all(a.symbols, a.days)
     base = f"breakout={'ON' if a.breakout else 'off'} exit={a.exit_mode} trail={a.trail} " \
@@ -411,8 +460,19 @@ def main():
                 report(("NO breaker" if lp == "0" else f"loss-pause={lp}% / {a.loss_window}b") + "  " + base, st)
         print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
         return
+    if a.ab_chop:
+        # no gate vs leader efficiency-ratio floors -- does standing aside when the
+        # leader is directionless (range/chop) improve expectancy AND the tail?
+        for er in ("0", "0.15", "0.25", "0.35", "0.45"):
+            cfg2 = dict(cfg); cfg2["er_floor"] = er
+            st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
+            if st:
+                report(("NO gate" if er == "0" else f"er-floor={er}") + "  " + base, st)
+        print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
+        return
     st = simulate_mp(cfg, a.symbols, a.days, a.breakout, data=data)
     if st:
+        st["by_symbol"] = a.by_symbol
         report(base, st)
     print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
 
