@@ -414,6 +414,12 @@ def run() -> None:
                  "pending_max_age_h": mgmt.get("pending_max_age_h"),
                  "position_diag": mgmt.get("position_diag", []),
                  "state_runs": mgmt.get("state_runs"),
+                 # v0.9.0 observability: emit each control's running state every cycle
+                 # (not only when it fires) so an INERT control is visible -- the trail
+                 # was dead a whole session because nothing surfaced its status.
+                 "controls_active": mgmt.get("controls_active", {}),
+                 "loss_breaker": mgmt.get("loss_breaker", False),
+                 "realized_window_pnl": mgmt.get("realized_window_pnl"),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
     )
