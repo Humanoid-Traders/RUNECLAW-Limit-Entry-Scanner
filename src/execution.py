@@ -377,15 +377,14 @@ def _coerce_ms(value: Any) -> Optional[int]:
     return v
 
 
-def _trailing_realized_pnl(window_hours: float) -> Optional[float]:
-    """v0.8.0 stateless trailing realized PnL: sum the realized `profit` of contract
-    fills whose fill time falls within the trailing window. Sourced from
-    ``trade.contract.fills`` -- exchange-persisted, so it needs NO ``.state/`` (the
-    reason the equity circuit breaker is dead in this runtime). Fail-open: returns
-    None (=> no pause) if fills cannot be read or carry no profit/time field, so a
-    read failure never blocks trading -- this brake only ever *adds* caution."""
+def _read_fills(limit: int = 100) -> Optional[list]:
+    """v0.8.0: recent contract fills as a row list, or None if unreadable/empty.
+    Exchange-persisted (``trade.contract.fills``) -> needs NO ``.state/`` (the reason
+    the equity circuit breaker is dead in this runtime). Fail-open everywhere: a read
+    glitch returns None so it never blocks trading. One read serves both the
+    realized-loss breaker and the live journal (v0.9.1)."""
     try:
-        result = trade.contract.fills(limit=100)
+        result = trade.contract.fills(limit=limit)
     except Exception:
         return None
     try:
@@ -394,25 +393,68 @@ def _trailing_realized_pnl(window_hours: float) -> Optional[float]:
     except Exception:
         pass  # no is_success -> fall through and try to parse rows
     rows = _extract_rows(result)
-    if not rows:
-        return None
+    return rows or None
+
+
+def _fills_in_window(rows: list, window_hours: float) -> list:
+    """Parsed fills inside the trailing window: [{ts, profit, m}, ...]."""
     cutoff = _now_ms() - int(window_hours * 3_600_000)
-    total = 0.0
-    found = False
+    out = []
     for row in rows:
-        mapping = _to_mapping(row) or {}
-        ts = _coerce_ms(_find_open_time_value(mapping))
+        m = _to_mapping(row) or {}
+        ts = _coerce_ms(_find_open_time_value(m))
         if ts is None or ts < cutoff:
             continue
+        profit = None
         for key in _REALIZED_PNL_KEYS:
-            if key in mapping:
+            if key in m:
                 try:
-                    total += float(mapping[key])
-                    found = True
+                    profit = float(m[key])
                 except (TypeError, ValueError):
-                    pass
+                    profit = None
                 break
-    return total if found else None
+        out.append({"ts": ts, "profit": profit, "m": m})
+    return out
+
+
+def _realized_pnl(rows: list, window_hours: float) -> Optional[float]:
+    """Sum realized profit of in-window fills; None if none carry a profit field."""
+    profits = [w["profit"] for w in _fills_in_window(rows, window_hours) if w["profit"] is not None]
+    return sum(profits) if profits else None
+
+
+def _trailing_realized_pnl(window_hours: float) -> Optional[float]:
+    """Stateless trailing realized PnL from fills. Fail-open: None (=> no pause) if
+    fills are unreadable/empty or carry no profit field, so a read failure never
+    blocks trading -- this brake only ever *adds* caution."""
+    rows = _read_fills()
+    if not rows:
+        return None
+    return _realized_pnl(rows, window_hours)
+
+
+_FILL_ID_KEYS = ("tradeId", "trade_id", "fillId", "fill_id", "orderId", "order_id")
+_FILL_SIDE_KEYS = ("side", "tradeSide", "trade_side", "posSide", "pos_side", "holdSide")
+
+
+def _fills_journal(rows: list, window_hours: float, cap: int = 50) -> list:
+    """v0.9.1 Phase-4 live journal: compact per-fill closed-trade records for
+    live-vs-backtest reconciliation -- [{id, sym, side, profit, ts}, ...], most
+    recent first, capped. REALIZED PnL only: live MAE/MFE needs an intra-trade
+    high-water track the stateless 15-min runtime cannot keep, so excursions stay a
+    backtest-only metric (documented gap, not a silent one)."""
+    win = sorted(_fills_in_window(rows, window_hours), key=lambda w: w["ts"], reverse=True)
+    out = []
+    for w in win[:cap]:
+        m = w["m"]
+        out.append({
+            "id": _find_string(m, _FILL_ID_KEYS),
+            "sym": _find_string(m, ("symbol",)).upper(),
+            "side": _find_string(m, _FILL_SIDE_KEYS),
+            "profit": w["profit"],
+            "ts": w["ts"],
+        })
+    return out
 
 
 def manage_open_state(cfg: dict) -> dict:
@@ -549,23 +591,34 @@ def manage_open_state(cfg: dict) -> dict:
         lb_frac = float(cfg.get("loss_breaker_frac", "0") or "0")
     except (TypeError, ValueError):
         lb_frac = 0.0
-    if lb_frac > 0:
-        try:
-            lb_window = float(cfg.get("loss_breaker_window_hours", "24") or "24")
-        except (TypeError, ValueError):
-            lb_window = 24.0
-        try:
-            margin = float(cfg.get("margin_budget", "100") or "100")
-            lev = max(int(cfg.get("leverage", 10) or 10), 1)
-        except (TypeError, ValueError):
-            margin, lev = 100.0, 10
-        threshold = lb_frac * margin * lev
-        realized = _trailing_realized_pnl(lb_window)
-        status["realized_window_pnl"] = None if realized is None else round(realized, 4)
-        if realized is not None and realized <= -abs(threshold):
-            status["loss_breaker"] = True
-            status["controls_active"]["loss_breaker"] = True
-            actions.append({"loss_breaker_pause": round(realized, 2)})
+    journal_on = str(cfg.get("journal_enabled", "true")).strip().lower() not in ("false", "0", "no", "")
+    if lb_frac > 0 or journal_on:
+        fills_rows = _read_fills()  # one read serves both the breaker and the journal
+        # v0.9.1 Phase-4 live journal: emit recent closed-trade realized records so
+        # live results can be reconciled against the backtest (audit #30). Read-only.
+        if journal_on and fills_rows:
+            try:
+                jw = float(cfg.get("journal_window_hours", "24") or "24")
+            except (TypeError, ValueError):
+                jw = 24.0
+            status["fills_journal"] = _fills_journal(fills_rows, jw)
+        if lb_frac > 0:
+            try:
+                lb_window = float(cfg.get("loss_breaker_window_hours", "24") or "24")
+            except (TypeError, ValueError):
+                lb_window = 24.0
+            try:
+                margin = float(cfg.get("margin_budget", "100") or "100")
+                lev = max(int(cfg.get("leverage", 10) or 10), 1)
+            except (TypeError, ValueError):
+                margin, lev = 100.0, 10
+            threshold = lb_frac * margin * lev
+            realized = _realized_pnl(fills_rows, lb_window) if fills_rows else None
+            status["realized_window_pnl"] = None if realized is None else round(realized, 4)
+            if realized is not None and realized <= -abs(threshold):
+                status["loss_breaker"] = True
+                status["controls_active"]["loss_breaker"] = True
+                actions.append({"loss_breaker_pause": round(realized, 2)})
 
     if status["circuit"] == "tripped":
         _flatten_owned(cfg, owned_position_records, owned_pending_records, actions)

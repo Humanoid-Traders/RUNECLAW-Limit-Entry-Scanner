@@ -420,6 +420,9 @@ def run() -> None:
                  "controls_active": mgmt.get("controls_active", {}),
                  "loss_breaker": mgmt.get("loss_breaker", False),
                  "realized_window_pnl": mgmt.get("realized_window_pnl"),
+                 # v0.9.1 Phase-4 live journal: closed-trade realized records for
+                 # live-vs-backtest reconciliation (accrues over cycles via metrics).
+                 "fills_journal": mgmt.get("fills_journal", []),
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
     )

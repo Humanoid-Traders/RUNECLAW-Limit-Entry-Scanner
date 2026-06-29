@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.0"
+version: "0.9.1"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -118,6 +118,14 @@ strategy_config:
   # proven no-op); set frac to 0.08 to enable. Pause only -- never flattens.
   loss_breaker_frac: "0"
   loss_breaker_window_hours: "24"
+  # v0.9.1 -- Phase-4 live trade journal. Each cycle, emit recent closed-trade
+  # realized records (from exchange fills -- the same read the loss breaker uses, so
+  # no extra cost when the breaker is on) into the DBG metrics, so live results can
+  # be reconciled against the backtest (the missing live-vs-backtest feedback loop).
+  # Read-only, fail-open. Realized PnL only -- live MAE/MFE needs an intra-trade
+  # high-water track the stateless runtime can't keep. Default on; set false to skip.
+  journal_enabled: "true"
+  journal_window_hours: "24"
   time_stop_hours: "12"
   limit_expiry_hours: "4"
   limit_chase_pct: "3.0"
@@ -262,3 +270,13 @@ user_config_schema:
     min: 1
     max: 168
     label: "Realized-loss breaker lookback window (hours)"
+  journal_enabled:
+    type: boolean
+    default: true
+    label: "Live trade journal: emit closed-trade realized records each cycle for live-vs-backtest reconciliation (read-only)"
+  journal_window_hours:
+    type: number
+    default: 24
+    min: 1
+    max: 168
+    label: "Live journal lookback window (hours)"
