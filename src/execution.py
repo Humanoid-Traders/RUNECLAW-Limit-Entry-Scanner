@@ -57,6 +57,11 @@ _EQUITY_KEYS = ("usdtEquity", "accountEquity", "totalEquity", "equity",
 # PnL direction -- unlike unrealizedPL which is ~0 at breakeven, and unlike `locked`
 # which a resting limit also consumes). Used to detect the read-lies-empty blind-spot.
 _POSITION_MARGIN_KEYS = ("crossedMargin", "isolatedMargin")
+# v0.8.0: realized PnL on a contract fill (non-zero on closing fills). Bitget fills
+# serialise `profit`; carry snake_case + alternates so the read never silently
+# returns None the way the camelCase-only entry price did (the v0.6.7 lesson).
+_REALIZED_PNL_KEYS = ("profit", "realizedPL", "realized_pl", "realizedPnl",
+                      "realized_pnl", "netProfit", "net_profit", "pnl", "totalProfits")
 
 
 def _to_mapping(value: Any) -> Optional[dict]:
@@ -359,6 +364,57 @@ def _shape(value: Any, depth: int = 0) -> str:
     return type(value).__name__
 
 
+def _coerce_ms(value: Any) -> Optional[int]:
+    """Coerce a timestamp to epoch-ms, tolerating seconds (10-digit) vs ms (13)."""
+    try:
+        v = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    if v < 10_000_000_000:   # 10-digit => seconds; promote to ms
+        v *= 1000
+    return v
+
+
+def _trailing_realized_pnl(window_hours: float) -> Optional[float]:
+    """v0.8.0 stateless trailing realized PnL: sum the realized `profit` of contract
+    fills whose fill time falls within the trailing window. Sourced from
+    ``trade.contract.fills`` -- exchange-persisted, so it needs NO ``.state/`` (the
+    reason the equity circuit breaker is dead in this runtime). Fail-open: returns
+    None (=> no pause) if fills cannot be read or carry no profit/time field, so a
+    read failure never blocks trading -- this brake only ever *adds* caution."""
+    try:
+        result = trade.contract.fills(limit=100)
+    except Exception:
+        return None
+    try:
+        if not bool(trade.is_success(result)):
+            return None
+    except Exception:
+        pass  # no is_success -> fall through and try to parse rows
+    rows = _extract_rows(result)
+    if not rows:
+        return None
+    cutoff = _now_ms() - int(window_hours * 3_600_000)
+    total = 0.0
+    found = False
+    for row in rows:
+        mapping = _to_mapping(row) or {}
+        ts = _coerce_ms(_find_open_time_value(mapping))
+        if ts is None or ts < cutoff:
+            continue
+        for key in _REALIZED_PNL_KEYS:
+            if key in mapping:
+                try:
+                    total += float(mapping[key])
+                    found = True
+                except (TypeError, ValueError):
+                    pass
+                break
+    return total if found else None
+
+
 def manage_open_state(cfg: dict) -> dict:
     actions: list = []
     status = {
@@ -368,7 +424,8 @@ def manage_open_state(cfg: dict) -> dict:
         "open_symbols": [],
         "owned_symbols": [],
         "all_account_symbols": [],
-        "controls_active": {"circuit_breaker": False, "time_stop": False, "auto_be": False},
+        "controls_active": {"circuit_breaker": False, "time_stop": False,
+                            "auto_be": False, "loss_breaker": False},
         "actions": actions,
     }
 
@@ -479,6 +536,36 @@ def manage_open_state(cfg: dict) -> dict:
     status["pending_total"] = len(pending_records)
     status["owned_pending"] = len(owned_pending_records)
     status["ran"] = True
+
+    # --- v0.8.0 stateless realized-loss breaker (validated in research/replay_mp) ---
+    # The .state-backed equity circuit breaker is dead in the ephemeral runtime
+    # (state_runs stuck at 1 => day_start_equity never round-trips). This is its
+    # stateless replacement: PAUSE new entries when trailing-window realized PnL
+    # (summed from exchange fills) is at/below the threshold. Opt-in -- frac 0 is the
+    # proven no-op default; the validated setting is ~0.08 of one slot's notional
+    # over 24h (DESIGN_v0.8.0: harmless in healthy windows, cut maxDD ~22% in weak
+    # ones). Pause only: it never flattens, existing positions keep exchange SL/TP.
+    try:
+        lb_frac = float(cfg.get("loss_breaker_frac", "0") or "0")
+    except (TypeError, ValueError):
+        lb_frac = 0.0
+    if lb_frac > 0:
+        try:
+            lb_window = float(cfg.get("loss_breaker_window_hours", "24") or "24")
+        except (TypeError, ValueError):
+            lb_window = 24.0
+        try:
+            margin = float(cfg.get("margin_budget", "100") or "100")
+            lev = max(int(cfg.get("leverage", 10) or 10), 1)
+        except (TypeError, ValueError):
+            margin, lev = 100.0, 10
+        threshold = lb_frac * margin * lev
+        realized = _trailing_realized_pnl(lb_window)
+        status["realized_window_pnl"] = None if realized is None else round(realized, 4)
+        if realized is not None and realized <= -abs(threshold):
+            status["loss_breaker"] = True
+            status["controls_active"]["loss_breaker"] = True
+            actions.append({"loss_breaker_pause": round(realized, 2)})
 
     if status["circuit"] == "tripped":
         _flatten_owned(cfg, owned_position_records, owned_pending_records, actions)
@@ -819,6 +906,12 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
 
     if mgmt.get("circuit") in ("paused", "tripped"):
         return {"placed": False, "reason": "circuit_" + str(mgmt.get("circuit"))}
+
+    # v0.8.0: stateless realized-loss breaker -- after a fresh losing streak (trailing
+    # realized PnL past the threshold), stand aside instead of feeding a bad regime.
+    # Existing positions are untouched; only NEW entries pause until the streak clears.
+    if mgmt.get("loss_breaker"):
+        return {"placed": False, "reason": "loss_breaker"}
 
     open_count = int(mgmt.get("open_count", 0) or 0)
     open_symbols = [str(s).upper() for s in (mgmt.get("open_symbols") or [])]
