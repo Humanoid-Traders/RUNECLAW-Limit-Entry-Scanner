@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.1"
+version: "0.9.3"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -116,7 +116,11 @@ strategy_config:
   # research/replay_mp (DESIGN_v0.8.0): 0.08 over 24h was harmless in healthy
   # windows (never fired) and cut maxDD ~22% in weak ones. Default 0 = OFF (opt-in,
   # proven no-op); set frac to 0.08 to enable. Pause only -- never flattens.
-  loss_breaker_frac: "0"
+  # ARMED 2026-07-01: the operator's first live drawdown session (2W/4L,
+  # -$33.21, two correlated overnight crypto shorts both stopped) was the
+  # exact pattern this breaker targets. Enabling now -- validated harmless in
+  # healthy sessions, tail-cutting in weak ones.
+  loss_breaker_frac: "0.08"
   loss_breaker_window_hours: "24"
   # v0.9.1 -- Phase-4 live trade journal. Each cycle, emit recent closed-trade
   # realized records (from exchange fills -- the same read the loss breaker uses, so
@@ -260,10 +264,10 @@ user_config_schema:
     label: "Margin mode for new opens (crossed = proven default; isolated = trial-gated, see DESIGN_v0.6.4)"
   loss_breaker_frac:
     type: number
-    default: 0
+    default: 0.08
     min: 0
     max: 0.5
-    label: "Realized-loss breaker: pause new entries after trailing-window realized loss reaches this x one slot's notional (0 = off; 0.08 validated, see DESIGN_v0.8.0)"
+    label: "Realized-loss breaker: pause new entries after trailing-window realized loss reaches this x one slot's notional (0 = off; 0.08 = armed default, see DESIGN_v0.8.0)"
   loss_breaker_window_hours:
     type: number
     default: 24
