@@ -154,7 +154,12 @@ strategy_config:
   # rollout pattern as margin_mode/loss_breaker). Recommended: 2. FAIL-OPEN --
   # an unreadable calendar never blocks trading; existing positions/limits are
   # never touched (this gates opens only).
-  event_blackout_hours: "0"
+  # ARMED 2026-07-02 (0.6.15): set to 2 now that the equity legs (TSLA/NVDA/MSTR)
+  # are fully effective in 0.6.14. Stock perps gap on high-importance US prints
+  # (FOMC/CPI/NFP) and the SL/trail are tuned on crypto's continuous tape, so
+  # opted-in universes stand aside +/-2h around those events. Crypto/metals do
+  # not opt in, so their entries are unaffected.
+  event_blackout_hours: "2"
   event_blackout_importance: "high"
   event_blackout_country: "US"
   time_stop_hours: "12"
