@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.5"
+version: "0.9.6"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -97,6 +97,19 @@ strategy_config:
   tp2_pct: "15.0"
   trail_atr_mult: "2.0"
   breakeven_pct: "2.0"
+  # v0.9.6 -- breakeven floor UNDER the trail. The trail rides trail_atr_mult*ATR
+  # behind the high-water mark, so a name that runs LESS than that width leaves the
+  # stop below entry and gives back the whole move (the live 2026-07-02 MSTR case:
+  # peaked +4.37% but the 2*ATR trail still sat below entry, so a would-be flat
+  # stopped at -$3.75). Once breakeven is armed, the protective stop is floored at
+  # breakeven_lock_pct the other side of entry (a small fee-clearing lock), applied
+  # only when that price is already inside the market (never an above-market self-
+  # trigger). Default 0 = OFF (pure trail, proven no-op -- same opt-in rollout as
+  # loss_breaker_frac/event_blackout). Validated in research/replay_mp.py --ab-belock:
+  # maxDD falls in EVERY window (35d breakout -29.4%->-16.4%), net preserved at
+  # ~0.75*breakeven_pct; a tiny "flat" lock is the worst choice (banks nothing yet
+  # chokes runners). Recommended when armed: 1.5 (must stay < breakeven_pct).
+  breakeven_lock_pct: "0"
   sl_min_btc_eth_pct: "1.5"
   sl_min_sol_bnb_pct: "1.2"
   sl_min_alt_pct: "2.5"
@@ -310,3 +323,9 @@ user_config_schema:
     min: 0
     max: 24
     label: "Macro event blackout: suppress NEW entries in opted-in universes within this many hours of a high-importance US calendar event (0 = off; 2 recommended for RWA equities)"
+  breakeven_lock_pct:
+    type: number
+    default: 0
+    min: 0
+    max: 5
+    label: "Breakeven floor under the trail: once a trade is in profit, lock the stop this %% the other side of entry so a runner that reverses can't give back the whole move (0 = off; 1.5 recommended when armed, must stay below breakeven_pct; see DESIGN v0.9.6)"
