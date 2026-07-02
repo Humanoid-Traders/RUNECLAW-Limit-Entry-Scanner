@@ -292,8 +292,9 @@ codebase is published as `0.6.8` on the deployment).
 │   └── live_journal.py        # reduce live journal records → live metrics
 ├── tests/                     # network-free unit tests (getagent stubbed)
 ├── docs/                      # DESIGN_v0.2.0 … DESIGN_v0.9.2 (design history)
+│   └── legacy/                # quarantined prior-generation artifacts (v3.x —
+│                              #   code not in this repo; claims unverifiable)
 ├── audit/                     # security + API audits, file hashes
-├── backtest/                  # in-sample analysis
 └── logs/                      # trading log artifacts
 ```
 

@@ -1,3 +1,10 @@
+> **⚠️ LEGACY ARTIFACT (historical record).** Parts of this document date from the
+> prior "RUNECLAW v3.x" lineage and reference artifacts that are **not in this
+> repository** (`backtest/runner.py`, `backtest/config.json`,
+> `backtest/RUNECLAW_IN_SAMPLE_ANALYSIS.md`). Those references describe a
+> different, earlier system — see `docs/legacy/BACKTEST_REPORT_v3.3.0.md`.
+> The authoritative description of the current system is `README.md`.
+
 # RUNECLAW — Executive Memo for Judges
 
 **Team:** HUMANOID TRADERS (Rotterdam)  

@@ -1,3 +1,16 @@
+> ## ⚠️ LEGACY ARTIFACT — prior-generation system, code NOT in this repository
+>
+> **This report describes "RUNECLAW v3.3.0" — a confluence-voting engine
+> (6 signal types, 3/5 voting, on-chain signals, Kraken BTCUSDT 4h) whose
+> source code is not present in this repository.** It references
+> `backtest/config.json` and `backtest/runner.py`, which do not exist here,
+> and its config hash is a placeholder. Its performance claims (PF 1.20,
+> Sharpe 0.486) therefore **cannot be verified from this repository** and
+> must not be cited as evidence for the current v0.9.x deterministic
+> scanner, which is a different system (see `README.md`). Retained solely
+> as a historical record of the prior lineage. Quarantined 2026-07-02
+> during the AI-analysis-engine audit.
+
 # RUNECLAW v3.3.0 In-Sample Backtest Analysis
 
 **Frozen at:** 2026-06-01  

@@ -170,17 +170,53 @@ def fetch_klines(symbol: str, interval: str = "1h", limit: int = 50,
     return bars
 
 
+_INTERVAL_S = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+               "1h": 3600, "4h": 14400, "1d": 86400}
+
+
+def _closed_bars(bars: list, interval: str) -> list:
+    """v0.9.4: drop the LAST bar iff its open-time says it is still forming
+    (open_ts + interval > now). Deterministic and side-effect-free on a feed of
+    closed candles: a closed last bar fails the condition and nothing changes;
+    only a genuinely in-progress bar is excluded, so indicators (ATR / trend)
+    never ingest a partial candle. Fail-open: an unparseable timestamp or
+    unknown interval keeps the bar (prior behavior)."""
+    if not bars:
+        return bars
+    step = _INTERVAL_S.get(interval)
+    if step is None:
+        return bars
+    ts = _bar_f(bars[-1], _BAR_T)
+    if ts is None or ts <= 0:
+        return bars
+    if ts > 10_000_000_000:  # ms epoch -> s
+        ts /= 1000.0
+    from datetime import datetime, timezone
+    if ts + step > datetime.now(timezone.utc).timestamp():
+        return bars[:-1]
+    return bars
+
+
 def _wilder_atr(bars: list, period: int) -> Optional[float]:
-    """Wilder-smoothed ATR over ``period`` bars; None if too few clean bars."""
-    highs, lows, closes = [], [], []
-    for b in bars:
+    """Wilder-smoothed ATR over ``period`` bars; None if too few clean bars.
+
+    v0.9.4: fail-safe on a NON-CONTIGUOUS series -- if a malformed bar is
+    dropped from the MIDDLE of the window, the surviving neighbors are not
+    adjacent and their stitched true-range is fictitious (h_i vs a close from
+    two bars back). Rather than compute a wrong ATR, return None and let
+    ``enrich`` degrade to the documented range-proxy path. Malformed bars at
+    the very ends trim cleanly and do not invalidate the series."""
+    highs, lows, closes, idxs = [], [], [], []
+    for i, b in enumerate(bars):
         h, l, c = _bar_f(b, _BAR_H), _bar_f(b, _BAR_L), _bar_f(b, _BAR_C)
         if h is None or l is None or c is None:
             continue
-        highs.append(h); lows.append(l); closes.append(c)
+        highs.append(h); lows.append(l); closes.append(c); idxs.append(i)
     n = len(closes)
     if n < period + 1:
         return None
+    if idxs and (idxs[-1] - idxs[0] + 1) != n:
+        return None  # mid-series gap -> stitched TRs would be fictitious
     trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]),
                abs(lows[i] - closes[i - 1])) for i in range(1, n)]
     atr = sum(trs[:period]) / period
@@ -240,15 +276,15 @@ def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> Symbol
     t_look = int(cfg.get("trend_lookback", 12))
     t_norm = float(cfg.get("trend_norm", "0.05"))
 
-    bars = fetch_klines(feats.symbol, interval=k_int,
-                        limit=max(atr_period + 5, 30), exchange=exchange)
+    bars = _closed_bars(fetch_klines(feats.symbol, interval=k_int,
+                                     limit=max(atr_period + 5, 30), exchange=exchange), k_int)
     atr = _wilder_atr(bars, atr_period) if bars else None
     if atr is not None:
         feats.atr = atr
         feats.kline_ok = True
 
-    t_bars = bars if t_int == k_int else fetch_klines(
-        feats.symbol, interval=t_int, limit=max(t_look + 5, 20), exchange=exchange)
+    t_bars = bars if t_int == k_int else _closed_bars(fetch_klines(
+        feats.symbol, interval=t_int, limit=max(t_look + 5, 20), exchange=exchange), t_int)
     feats.trend_dir, feats.trend_strength = _ema_trend(t_bars, t_look, t_norm)
 
     f_int = str(cfg.get("funding_interval", "1h"))

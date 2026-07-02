@@ -14,6 +14,12 @@ from getagent import runtime
 from . import execution, features, risk, scoring
 
 _GATE = "BTCUSDT"
+# v0.9.4: version + provenance stamp on every emitted analysis record, so
+# downstream consumers (journal reducer, dashboards, future reconciliation)
+# can attribute any output to the exact analysis generation that produced it.
+# The engine is deterministic end-to-end -- no LLM in the decision path.
+ANALYSIS_VERSION = "0.9.4"
+THESIS_SOURCE = "deterministic_rules"
 
 
 def _cfg() -> dict:
@@ -263,6 +269,8 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "trend_dir": best.features.trend_dir,
         "funding_now": best.features.funding_now,
         "universe": best.universe,
+        "analysis_version": ANALYSIS_VERSION,
+        "thesis_source": THESIS_SOURCE,
     })
     meta = dict(base_meta)
     meta.update({
@@ -423,6 +431,8 @@ def run() -> None:
                  # v0.9.1 Phase-4 live journal: closed-trade realized records for
                  # live-vs-backtest reconciliation (accrues over cycles via metrics).
                  "fills_journal": mgmt.get("fills_journal", []),
+                 "analysis_version": ANALYSIS_VERSION,
+                 "thesis_source": THESIS_SOURCE,
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
     )
