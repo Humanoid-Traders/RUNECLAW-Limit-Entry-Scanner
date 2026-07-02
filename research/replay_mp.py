@@ -161,6 +161,13 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     exit_mode = str(cfg.get("exit_mode", "fixed"))
     tmult = float(cfg.get("trail_atr_mult", "1.0"))
     fee = float(cfg.get("fee_pct", "0")) / 100.0
+    # v0.9.6 breakeven floor under the trail: once a position has moved be_pct in
+    # favour (hw past the trigger), the ratcheting trail is floored at a small
+    # fee-clearing lock above/below entry, so a name that ran less than the trail's
+    # tmult*ATR width can no longer give back the whole move and stop below entry
+    # (the live MSTR case). 0 => off (pure trail, the pre-v0.9.6 behaviour).
+    be_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
+    be_lock = float(cfg.get("breakeven_lock_pct", "0")) / 100.0
     # v0.8.0 correlation budget: <=0 => legacy count cap (unchanged); >0 => the
     # correlation-weighted same-side exposure model.
     corr_budget = float(cfg.get("corr_budget", "0"))
@@ -213,14 +220,22 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     elif hi >= p["tp2"]:
                         ex = (p["tp2"], "tp2")
                     else:
-                        p["hw"] = max(p["hw"], hi); p["trail"] = max(p["trail"], p["hw"] - tmult * p["atr"])
+                        p["hw"] = max(p["hw"], hi)
+                        nt = p["hw"] - tmult * p["atr"]
+                        if be_lock > 0 and (p["hw"] - p["fill_px"]) / p["fill_px"] >= be_pct:
+                            nt = max(nt, p["fill_px"] * (1.0 + be_lock))
+                        p["trail"] = max(p["trail"], nt)
                 else:
                     if hi >= p["trail"]:
                         ex = (p["trail"], "trail" if p["trail"] < p["sl"] else "sl")
                     elif lo <= p["tp2"]:
                         ex = (p["tp2"], "tp2")
                     else:
-                        p["hw"] = min(p["hw"], lo); p["trail"] = min(p["trail"], p["hw"] + tmult * p["atr"])
+                        p["hw"] = min(p["hw"], lo)
+                        nt = p["hw"] + tmult * p["atr"]
+                        if be_lock > 0 and (p["fill_px"] - p["hw"]) / p["fill_px"] >= be_pct:
+                            nt = min(nt, p["fill_px"] * (1.0 - be_lock))
+                        p["trail"] = min(p["trail"], nt)
             else:
                 if long:
                     if lo <= p["sl"]: ex = (p["sl"], "sl")
@@ -384,6 +399,11 @@ def main():
     ap.add_argument("--breakout", action="store_true")
     ap.add_argument("--exit-mode", default="fixed", choices=["fixed", "trail"])
     ap.add_argument("--trail", default="1.0")
+    ap.add_argument("--be-lock", default="0",
+                    help="breakeven floor under the trail: lock %% above/below entry once "
+                         "the move passes breakeven_pct (0=off, pure trail)")
+    ap.add_argument("--ab-belock", action="store_true",
+                    help="A/B pure trail vs a sweep of breakeven-lock floors (needs --exit-mode trail)")
     ap.add_argument("--time-stop", default="4")
     ap.add_argument("--corr-budget", default="0",
                     help="0=legacy count cap; >0=correlation-weighted exposure budget")
@@ -427,6 +447,7 @@ def main():
         "heat_pause_pct": a.heat_pause,
         "loss_pause_pct": a.loss_pause, "loss_window_bars": a.loss_window,
         "er_floor": a.er_floor, "er_lookback": a.er_lookback, "leader": a.leader,
+        "breakeven_lock_pct": a.be_lock,
     }
     fetch_syms = list(dict.fromkeys(list(a.symbols) + [a.leader]))  # leader must be fetched too
     data = R.fetch_all(fetch_syms, a.days)
@@ -471,6 +492,18 @@ def main():
             st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
             if st:
                 report(("NO gate" if er == "0" else f"er-floor={er}") + "  " + base, st)
+        print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
+        return
+    if a.ab_belock:
+        # pure trail vs a breakeven floor under it (needs exit-mode trail). The tail
+        # test for the live MSTR give-back: does locking near flat once armed protect
+        # the winners that reverse WITHOUT choking runners on normal pullback noise?
+        cfg_t = dict(cfg); cfg_t["exit_mode"] = "trail"
+        for bl in ("0", "0.15", "0.5", "1.0", "1.5"):
+            cfg2 = dict(cfg_t); cfg2["breakeven_lock_pct"] = bl
+            st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
+            if st:
+                report(("PURE trail" if bl == "0" else f"be-lock={bl}%") + "  " + base, st)
         print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
         return
     st = simulate_mp(cfg, a.symbols, a.days, a.breakout, data=data)

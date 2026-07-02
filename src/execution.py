@@ -799,7 +799,8 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
             # (no_atr / no_sl_order / no_sl_trigger / hold:<trail>v<cur> / tick /
             # modify_err:<msg> / set:<price>) so a silently-inert trail is visible
             # the way xpd surfaced the silent limit-expiry. See DESIGN_v0.6.4.md.
-            if _trail_stop(symbol, hold_side, current, cfg, actions, status, diag):
+            if _trail_stop(symbol, hold_side, current, cfg, actions, status, diag,
+                           entry=entry, be_armed=be_armed):
                 diag["acted"] = "trail_stop"
         elif be_armed:
             _move_stop_to_breakeven(symbol, entry, actions, status)
@@ -826,7 +827,8 @@ def _move_stop_to_breakeven(symbol: str, entry: float, actions: list, status: di
 
 
 def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
-                actions: list, status: dict, diag: Optional[dict] = None) -> bool:
+                actions: list, status: dict, diag: Optional[dict] = None,
+                entry: Optional[float] = None, be_armed: bool = False) -> bool:
     """v0.6.3 trailing stop. Ratchets the position's SL in the protective direction
     only -- to ``current -/+ trail_atr_mult*ATR`` -- moving it ONLY if that is
     strictly more protective than the live SL. STRICTLY ADDITIVE and fail-safe:
@@ -861,6 +863,31 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
     trail = current - tmult * atr if is_long else current + tmult * atr
     if trail <= 0:
         return _why("no_atr")
+    # v0.9.6 breakeven floor under the trail. The trail sits tmult*ATR behind the
+    # high-water mark, so a name that runs LESS than that width leaves the stop
+    # BELOW entry and can give back the entire move (the live MSTR case: peaked
+    # +4.37% but the 2*ATR trail still sat at 98.63 vs entry 99.23, so a would-be
+    # flat stopped at -3.75). Once breakeven is armed (the position moved
+    # breakeven_pct/breakeven_trigger_usdt in favour), floor the protective stop at
+    # a small fee-clearing lock the other side of entry. Strictly additive: it only
+    # ever tightens, and it is applied ONLY when the lock price is already inside
+    # the market (below current for a long / above for a short), so the upnl-armed
+    # path can never place an above-market stop that self-triggers at a worse fill.
+    # breakeven_lock_pct 0 (default) => pure trail, the pre-v0.9.6 behaviour.
+    # Validated in research/replay_mp.py --ab-belock: universal maxDD reduction,
+    # net-preserving at ~0.75*breakeven_pct; tiny locks bank nothing yet choke runners.
+    if be_armed and entry and entry > 0:
+        try:
+            lock = float(cfg.get("breakeven_lock_pct", "0") or "0") / 100.0
+        except (TypeError, ValueError):
+            lock = 0.0
+        if lock > 0:
+            be_lock = entry * (1.0 + lock) if is_long else entry * (1.0 - lock)
+            inside = (be_lock < current) if is_long else (be_lock > current)
+            if inside:
+                trail = max(trail, be_lock) if is_long else min(trail, be_lock)
+                if diag is not None:
+                    diag["be_lock"] = round(be_lock, 6)
     # Read the live SL plan order + its trigger. Unreadable -> NEVER blind-set.
     try:
         sl = trade.helpers.select_sl_plan_order(trade.contract.plan_pending_orders(symbol=symbol),
