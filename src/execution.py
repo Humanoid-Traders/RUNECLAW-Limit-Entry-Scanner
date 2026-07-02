@@ -676,6 +676,12 @@ def manage_open_state(cfg: dict) -> dict:
             threshold = lb_frac * margin * lev
             realized = _realized_pnl(fills_rows, lb_window) if fills_rows else None
             status["realized_window_pnl"] = None if realized is None else round(realized, 4)
+            # v0.9.7 observability: emit the breaker's own arithmetic so the
+            # operator never re-derives it (the recurring equity*frac misread).
+            # headroom = further realized loss that would trip it.
+            status["loss_breaker_threshold"] = round(threshold, 2)
+            if realized is not None:
+                status["loss_breaker_headroom"] = round(threshold + realized, 2)
             if realized is not None and realized <= -abs(threshold):
                 status["loss_breaker"] = True
                 status["controls_active"]["loss_breaker"] = True
@@ -790,6 +796,9 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
         diag["move_pct"] = round(move_pct * 100.0, 3)
         be_armed = (move_pct >= be_trigger_pct or (upnl is not None and upnl >= be_trigger_usdt))
         diag["be_armed"] = be_armed
+        # v0.9.7 scale-out (opt-in, fail-closed; no-op at the default frac 0).
+        # Runs BEFORE the trail so the trimmed size is what the stop then covers.
+        _scale_out(symbol, hold_side, current, entry, record, cfg, actions, status, diag)
         # v0.6.3: ratchet a trailing stop (strictly additive, fail-safe no-op) --
         # it subsumes auto-breakeven (the trail crosses entry as price runs). With
         # trail_atr_mult <= 0 the trail is disabled and the old breakeven-only
@@ -876,18 +885,42 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
     # breakeven_lock_pct 0 (default) => pure trail, the pre-v0.9.6 behaviour.
     # Validated in research/replay_mp.py --ab-belock: universal maxDD reduction,
     # net-preserving at ~0.75*breakeven_pct; tiny locks bank nothing yet choke runners.
-    if be_armed and entry and entry > 0:
-        try:
-            lock = float(cfg.get("breakeven_lock_pct", "0") or "0") / 100.0
-        except (TypeError, ValueError):
-            lock = 0.0
-        if lock > 0:
-            be_lock = entry * (1.0 + lock) if is_long else entry * (1.0 - lock)
-            inside = (be_lock < current) if is_long else (be_lock > current)
+    # v0.9.7 generalizes the single lock to a step-lock LADDER (cfg `steplock`,
+    # "arm:lock,arm:lock" in % of entry, e.g. "2:1.5,4:3,6:4.5") -- as the move
+    # extends past each arm level, the floor rises to that rung's lock, so a big
+    # runner banks progressively more instead of only ever the first 1.5%. The
+    # highest armed rung wins; the v0.9.6 breakeven_lock_pct acts as rung one.
+    # Same contract as v0.9.6: tighten-only, inside-market guard, stateless (the
+    # exchange SL is the memory -- a reversal keeps the highest floor reached
+    # because the trail never loosens). Validated in replay --ab-exitpack: the
+    # ladder beat the single lock in both breakout-ON windows (the live config).
+    if entry and entry > 0:
+        move_pct = (current - entry) / entry if is_long else (entry - current) / entry
+        floor = None
+        if be_armed:
+            try:
+                lock = float(cfg.get("breakeven_lock_pct", "0") or "0") / 100.0
+            except (TypeError, ValueError):
+                lock = 0.0
+            if lock > 0:
+                floor = lock
+        for rung in str(cfg.get("steplock", "") or "").split(","):
+            if ":" not in rung:
+                continue
+            arm_s, lock_s = rung.split(":", 1)
+            try:
+                arm, lock = float(arm_s) / 100.0, float(lock_s) / 100.0
+            except (TypeError, ValueError):
+                continue
+            if arm > 0 and lock > 0 and move_pct >= arm:
+                floor = lock if floor is None else max(floor, lock)
+        if floor is not None:
+            lock_px = entry * (1.0 + floor) if is_long else entry * (1.0 - floor)
+            inside = (lock_px < current) if is_long else (lock_px > current)
             if inside:
-                trail = max(trail, be_lock) if is_long else min(trail, be_lock)
+                trail = max(trail, lock_px) if is_long else min(trail, lock_px)
                 if diag is not None:
-                    diag["be_lock"] = round(be_lock, 6)
+                    diag["be_lock"] = round(lock_px, 6)
     # Read the live SL plan order + its trigger. Unreadable -> NEVER blind-set.
     try:
         sl = trade.helpers.select_sl_plan_order(trade.contract.plan_pending_orders(symbol=symbol),
@@ -926,6 +959,83 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
         return True
     except Exception as exc:
         return _why("modify_err:" + _exc_brief(exc)[:24])
+
+
+def _scale_out(symbol: str, hold_side: str, current: float, entry: float, record: dict,
+               cfg: dict, actions: list, status: dict, diag: Optional[dict] = None) -> None:
+    """v0.9.7 "Rule 9" scale-out: once the position has moved ``scaleout_trigger_pct``
+    in favour, close ``scaleout_frac`` of it at market and let the remainder ride the
+    trail + ladder. Validated in replay --ab-exitpack (50% @ trigger: net AND maxDD
+    improved in every window -- the one strict win of the exit pack).
+
+    OPT-IN (``scaleout_frac`` default 0 = proven no-op) and FAIL-CLOSED everywhere,
+    because this is NEW order surface (a partial reduce via ``place_order`` with
+    ``trade_side='close'``): an unreadable open-time, fills book, or qty means NO
+    trim this cycle -- never a blind order. The already-trimmed guard is stateless
+    but exchange-persisted (same pattern as the loss breaker): any fill on this
+    symbol newer than the position's open time means the trim already happened, so
+    a restart can never Zeno-halve the position. Direction is pinned (closing a
+    long is a SELL with pos_side=long/trade_side=close), so a wrong hedge-field
+    mapping is an exchange REJECT (surfaced in actions), never a wrong-way open.
+    Trial at small size before trusting -- the v0.6.4 isolated-margin rule."""
+    try:
+        frac = float(cfg.get("scaleout_frac", "0") or "0")
+        trig = float(cfg.get("scaleout_trigger_pct", "3.5") or "3.5") / 100.0
+    except (TypeError, ValueError):
+        return
+    if frac <= 0 or frac >= 1 or trig <= 0 or not entry or entry <= 0 or not current:
+        return
+    is_long = hold_side.lower() in ("long", "buy")
+    move_pct = (current - entry) / entry if is_long else (entry - current) / entry
+    if move_pct < trig:
+        return
+    if diag is not None:
+        diag["so"] = "armed"
+    open_ms = _to_epoch_ms(_find_open_time_value(record))
+    if not open_ms or open_ms <= 0:
+        if diag is not None:
+            diag["so"] = "no_open_ts"      # can't prove not-yet-trimmed -> no-op
+        return
+    rows = _read_fills()
+    if rows is None:
+        if diag is not None:
+            diag["so"] = "fills_unreadable"  # can't prove not-yet-trimmed -> no-op
+        return
+    for row in rows:
+        m = _to_mapping(row) or {}
+        if _find_string(m, ("symbol",)).upper() != symbol.upper():
+            continue
+        ts = _coerce_ms(_find_open_time_value(m))
+        # 2-min grace excludes the entry fill itself (its ts ~= the open time).
+        if ts is not None and ts > open_ms + 120_000:
+            if diag is not None:
+                diag["so"] = "already_trimmed"
+            return
+    qty = _find_number(record, _SIZE_KEYS)
+    if qty is None or qty <= 0:
+        if diag is not None:
+            diag["so"] = "no_qty"
+        return
+    part = qty * frac
+    try:
+        result = trade.contract.place_order(
+            symbol=symbol, side=("sell" if is_long else "buy"), order_type="market",
+            qty=str(part), price="", margin_mode=str(cfg.get("margin_mode", "crossed")).lower(),
+            pos_side=("long" if is_long else "short"), trade_side="close",
+        )
+        placed = bool(trade.is_success(result))
+    except Exception as exc:
+        if diag is not None:
+            diag["so"] = ("err:" + _exc_brief(exc))[:30]
+        return
+    if placed:
+        actions.append({"scale_out": symbol, "qty": str(part), "at": round(current, 6)})
+        status["controls_active"]["scale_out"] = True
+        if diag is not None:
+            diag["so"] = "trimmed:%s" % str(part)[:12]
+    else:
+        if diag is not None:
+            diag["so"] = ("reject:" + _result_reason(result))[:30]
 
 
 def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: list,

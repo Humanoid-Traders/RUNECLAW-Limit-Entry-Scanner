@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.6"
+version: "0.9.7"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -114,6 +114,26 @@ strategy_config:
   # net-preserving; 1.5 is 0.75*breakeven_pct so it clears fees and banks a real
   # win on a reversal without choking runners (a tiny flat lock was the worst).
   breakeven_lock_pct: "1.5"
+  # v0.9.7 -- step-lock LADDER: generalizes the single lock above to rising
+  # floors, "arm:lock,arm:lock" in % of entry. As a runner extends past each arm
+  # level the protective floor climbs to that rung's lock, so a big move banks
+  # progressively more on a reversal (the single lock only ever banked 1.5%).
+  # Same contract: tighten-only, inside-market guard, stateless (the exchange SL
+  # is the memory). Validated in replay --ab-exitpack: beat the single lock in
+  # both breakout-ON windows (the live config; +14.7%->+21.2% net, PF 1.21->1.31
+  # in the 35d window). ARMED at ship (it strictly extends the already-armed
+  # v0.9.6 lock -- rung one IS the 2:1.5 lock). Empty string disables.
+  steplock: "2:1.5,4:3,6:4.5"
+  # v0.9.7 -- "Rule 9" scale-out: once a position moves scaleout_trigger_pct in
+  # favour, close scaleout_frac of it at market; the remainder rides the trail +
+  # ladder. The one STRICT win of the exit-pack A/B (net AND maxDD improved in
+  # every window at frac 0.5). Ships OFF (0) despite validating because it is NEW
+  # order surface (partial reduce via place_order trade_side=close, hedge-mode
+  # fields) -- same trial gate as margin_mode v0.6.4: arm at small size first,
+  # watch the scale_out/so diag, then trust. Fail-closed everywhere; an
+  # exchange reject is surfaced, never retried blind. Recommended when trialed: 0.5.
+  scaleout_frac: "0"
+  scaleout_trigger_pct: "3.5"
   sl_min_btc_eth_pct: "1.5"
   sl_min_sol_bnb_pct: "1.2"
   sl_min_alt_pct: "2.5"
@@ -338,3 +358,20 @@ user_config_schema:
     min: 0
     max: 5
     label: "Breakeven floor under the trail: once a trade is in profit, lock the stop this %% the other side of entry so a runner that reverses can't give back the whole move (0 = off; 1.5 recommended when armed, must stay below breakeven_pct; see DESIGN v0.9.6)"
+  steplock:
+    type: string
+    default: ""
+    pattern: "^([0-9]+(\\.[0-9]+)?:[0-9]+(\\.[0-9]+)?)(,[0-9]+(\\.[0-9]+)?:[0-9]+(\\.[0-9]+)?)*$|^$"
+    label: "Step-lock ladder 'arm:lock,arm:lock' in %% of entry -- the protective floor climbs to the highest armed rung as the move extends (empty = off; '2:1.5,4:3,6:4.5' validated)"
+  scaleout_frac:
+    type: number
+    default: 0
+    min: 0
+    max: 0.9
+    label: "Scale-out: fraction of the position closed at market once the move passes scaleout_trigger_pct; remainder rides the trail + ladder (0 = off; 0.5 validated -- trial at small size first, new order surface)"
+  scaleout_trigger_pct:
+    type: number
+    default: 3.5
+    min: 0.5
+    max: 20
+    label: "Scale-out arm level (%% move in favour from entry)"

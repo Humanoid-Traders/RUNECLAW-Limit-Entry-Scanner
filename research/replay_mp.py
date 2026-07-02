@@ -168,6 +168,37 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     # (the live MSTR case). 0 => off (pure trail, the pre-v0.9.6 behaviour).
     be_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
     be_lock = float(cfg.get("breakeven_lock_pct", "0")) / 100.0
+    # v0.9.7 candidate A -- "Rule 9" scale-out: when price first touches tp1, bank
+    # scaleout_frac of the position at tp1 and let the remainder ride the trail.
+    # 0 => off. Exit fees split pro-rata across the legs, so total fee stays 2*fee.
+    so_frac = float(cfg.get("scaleout_frac", "0"))
+    # v0.9.7 candidate B -- step-lock ladder: generalize the v0.9.6 single
+    # breakeven lock to rising floors, "arm:lock,arm:lock,..." in % of entry
+    # (e.g. "2:1.5,4:3,6:4.5" = at +2% lock +1.5%, at +4% lock +3%, ...).
+    # The highest armed rung wins. Empty => off (single be_lock still applies).
+    ladder = []
+    for rung in str(cfg.get("steplock", "") or "").split(","):
+        if ":" in rung:
+            arm_s, lock_s = rung.split(":", 1)
+            try:
+                ladder.append((float(arm_s) / 100.0, float(lock_s) / 100.0))
+            except ValueError:
+                pass
+    ladder.sort()
+    # v0.9.7 candidate C -- time-stop profit guard: 12h clock closes losers/flats
+    # only; a position in profit keeps riding the trail (the trail/locks govern).
+    tstop_guard = str(cfg.get("tstop_guard", "0")).strip() in ("1", "true", "yes")
+
+    def _lock_floor(move_pct):
+        """Highest armed protective floor (fraction of entry) given the ladder,
+        the single be_lock, and how far the high-water has moved in favour."""
+        floor = None
+        if be_lock > 0 and move_pct >= be_pct:
+            floor = be_lock
+        for arm, lock in ladder:
+            if move_pct >= arm:
+                floor = lock if floor is None else max(floor, lock)
+        return floor
     # v0.8.0 correlation budget: <=0 => legacy count cap (unchanged); >0 => the
     # correlation-weighted same-side exposure model.
     corr_budget = float(cfg.get("corr_budget", "0"))
@@ -202,8 +233,11 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     def close(p, px, why, at):
         long = p["side"] == "long"
         r = ((px - p["fill_px"]) / p["fill_px"]) if long else ((p["fill_px"] - px) / p["fill_px"])
+        # blend any scale-out leg banked at tp1 with the remainder's exit; exit
+        # fees split pro-rata across the legs, so the total stays 2*fee.
+        total = p.get("banked", 0.0) + p.get("w", 1.0) * r
         trades.append({"sym": p["sym"], "side": p["side"], "mode": p["mode"],
-                       "ret_pct": round((r - 2 * fee) * 100, 3), "reason": why, "exit_i": at})
+                       "ret_pct": round((total - 2 * fee) * 100, 3), "reason": why, "exit_i": at})
 
     for i in range(25, n - 1):
         # 1) manage open positions
@@ -220,10 +254,17 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     elif hi >= p["tp2"]:
                         ex = (p["tp2"], "tp2")
                     else:
+                        # scale-out trim AFTER the exit checks (conservative: a bar
+                        # touching both trail and tp1 counts as the full-size exit).
+                        if so_frac > 0 and not p.get("trimmed") and hi >= p["tp1"]:
+                            p["banked"] = so_frac * (p["tp1"] - p["fill_px"]) / p["fill_px"]
+                            p["w"] = 1.0 - so_frac
+                            p["trimmed"] = True
                         p["hw"] = max(p["hw"], hi)
                         nt = p["hw"] - tmult * p["atr"]
-                        if be_lock > 0 and (p["hw"] - p["fill_px"]) / p["fill_px"] >= be_pct:
-                            nt = max(nt, p["fill_px"] * (1.0 + be_lock))
+                        floor = _lock_floor((p["hw"] - p["fill_px"]) / p["fill_px"])
+                        if floor is not None:
+                            nt = max(nt, p["fill_px"] * (1.0 + floor))
                         p["trail"] = max(p["trail"], nt)
                 else:
                     if hi >= p["trail"]:
@@ -231,10 +272,15 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     elif lo <= p["tp2"]:
                         ex = (p["tp2"], "tp2")
                     else:
+                        if so_frac > 0 and not p.get("trimmed") and lo <= p["tp1"]:
+                            p["banked"] = so_frac * (p["fill_px"] - p["tp1"]) / p["fill_px"]
+                            p["w"] = 1.0 - so_frac
+                            p["trimmed"] = True
                         p["hw"] = min(p["hw"], lo)
                         nt = p["hw"] + tmult * p["atr"]
-                        if be_lock > 0 and (p["fill_px"] - p["hw"]) / p["fill_px"] >= be_pct:
-                            nt = min(nt, p["fill_px"] * (1.0 - be_lock))
+                        floor = _lock_floor((p["fill_px"] - p["hw"]) / p["fill_px"])
+                        if floor is not None:
+                            nt = min(nt, p["fill_px"] * (1.0 - floor))
                         p["trail"] = min(p["trail"], nt)
             else:
                 if long:
@@ -244,7 +290,12 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     if hi >= p["sl"]: ex = (p["sl"], "sl")
                     elif lo <= p["tp1"]: ex = (p["tp1"], "tp1")
             if ex is None and (i - p["fill_i"]) >= tstop:
-                ex = (c, "time_stop")
+                # profit guard: an in-profit position keeps riding the trail/locks
+                # instead of being clock-closed (candidate C; guard off = legacy).
+                in_profit = ((c - p["fill_px"]) / p["fill_px"] if long
+                             else (p["fill_px"] - c) / p["fill_px"]) > 2 * fee
+                if not (tstop_guard and in_profit):
+                    ex = (c, "time_stop")
             if ex:
                 close(p, ex[0], ex[1], i)
             else:
@@ -404,6 +455,14 @@ def main():
                          "the move passes breakeven_pct (0=off, pure trail)")
     ap.add_argument("--ab-belock", action="store_true",
                     help="A/B pure trail vs a sweep of breakeven-lock floors (needs --exit-mode trail)")
+    ap.add_argument("--scaleout", default="0",
+                    help="fraction of the position banked at tp1, remainder rides the trail (0=off)")
+    ap.add_argument("--steplock", default="",
+                    help="rising lock ladder 'arm:lock,arm:lock' in %% of entry (empty=off)")
+    ap.add_argument("--tstop-guard", default="0",
+                    help="1 = the time-stop only closes losers/flats; winners keep the trail")
+    ap.add_argument("--ab-exitpack", action="store_true",
+                    help="A/B the v0.9.7 exit candidates vs the live v0.9.6 baseline (trail+belock 1.5)")
     ap.add_argument("--time-stop", default="4")
     ap.add_argument("--corr-budget", default="0",
                     help="0=legacy count cap; >0=correlation-weighted exposure budget")
@@ -447,7 +506,8 @@ def main():
         "heat_pause_pct": a.heat_pause,
         "loss_pause_pct": a.loss_pause, "loss_window_bars": a.loss_window,
         "er_floor": a.er_floor, "er_lookback": a.er_lookback, "leader": a.leader,
-        "breakeven_lock_pct": a.be_lock,
+        "breakeven_lock_pct": a.be_lock, "scaleout_frac": a.scaleout,
+        "steplock": a.steplock, "tstop_guard": a.tstop_guard,
     }
     fetch_syms = list(dict.fromkeys(list(a.symbols) + [a.leader]))  # leader must be fetched too
     data = R.fetch_all(fetch_syms, a.days)
@@ -492,6 +552,30 @@ def main():
             st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
             if st:
                 report(("NO gate" if er == "0" else f"er-floor={er}") + "  " + base, st)
+        print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
+        return
+    if a.ab_exitpack:
+        # v0.9.7 exit-management candidates vs the LIVE baseline (trail 2.0 +
+        # be-lock 1.5 = the deployed 0.6.15 exit stack). One knob per variant so
+        # any win is attributable; the last rows stack the individual winners.
+        variants = [
+            ("LIVE baseline (belock 1.5)", {}),
+            ("A: scale-out 25% @tp1",      {"scaleout_frac": "0.25"}),
+            ("A: scale-out 50% @tp1",      {"scaleout_frac": "0.5"}),
+            ("B: ladder 2:1.5,4:3",        {"breakeven_lock_pct": "0", "steplock": "2:1.5,4:3"}),
+            ("B: ladder 2:1.5,4:3,6:4.5",  {"breakeven_lock_pct": "0", "steplock": "2:1.5,4:3,6:4.5"}),
+            ("C: tstop profit-guard",      {"tstop_guard": "1"}),
+            ("B+C stacked",                {"breakeven_lock_pct": "0", "steplock": "2:1.5,4:3,6:4.5",
+                                            "tstop_guard": "1"}),
+            ("A50+B+C stacked",            {"scaleout_frac": "0.5", "breakeven_lock_pct": "0",
+                                            "steplock": "2:1.5,4:3,6:4.5", "tstop_guard": "1"}),
+        ]
+        cfg_t = dict(cfg); cfg_t["exit_mode"] = "trail"; cfg_t["breakeven_lock_pct"] = "1.5"
+        for tag2, over in variants:
+            cfg2 = dict(cfg_t); cfg2.update(over)
+            st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
+            if st:
+                report(tag2 + "  " + base, st)
         print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
         return
     if a.ab_belock:
