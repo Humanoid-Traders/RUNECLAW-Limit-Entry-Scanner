@@ -83,14 +83,25 @@ def _universes(cfg: dict) -> list:
         # a universe with no explicit symbols inherits the default trading_symbols
         syms = [str(s).upper() for s in (u.get("symbols") or [])] or default_syms
         if syms:
-            out.append({"name": str(u.get("name", leader)), "leader": leader,
-                        "symbols": syms, "allow_short": u.get("allow_short")})
+            row = {"name": str(u.get("name", leader)), "leader": leader,
+                   "symbols": syms, "allow_short": u.get("allow_short")}
+            # v0.9.5 BUG FIX: pass the per-universe flags through. _scan_universe
+            # has read uni.get("breakout") / uni.get("overrides") since v0.6.0,
+            # but this dict never carried them -- the manifest's equities
+            # `breakout: true` and `overrides` were silently ignored (equities
+            # ran pullback-only at the global ext cap). Copy only keys PRESENT
+            # in the config so `.get(key, default)` semantics stay intact for
+            # universes that omit a flag (crypto's name-based breakout default).
+            for key in ("breakout", "overrides", "event_blackout"):
+                if key in u:
+                    row[key] = u[key]
+            out.append(row)
     if out:
         return out
     return [{"name": "crypto", "leader": _GATE, "symbols": default_syms, "allow_short": None}]
 
 
-def _scan_universe(uni: dict, cfg: dict) -> dict:
+def _scan_universe(uni: dict, cfg: dict, blackout: dict = None) -> dict:
     """Resolve one universe's regime from its own leader and score its symbols.
     Each candidate is tagged with the universe name and its regime size_factor."""
     leader_sym = uni["leader"]
@@ -127,15 +138,27 @@ def _scan_universe(uni: dict, cfg: dict) -> dict:
         s.size_factor = reg.size_factor
     qualified = ([s for s in scored if not s.skip and s.score >= min_score]
                  if direction in ("long", "short") else [])
+    # v0.9.5 macro event blackout: an opted-in universe (RWA equities gap on
+    # high-importance US prints) suppresses NEW entries inside the event window.
+    # Scores stay on the board for visibility; only candidacy is withdrawn.
+    # Existing positions/limits are untouched (this gates opens only).
+    blacked = bool(blackout and uni.get("event_blackout"))
+    if blacked:
+        qualified = []
     return {"name": uni["name"], "leader": leader_sym, "regime": reg,
             "leader_feats": leader_feats, "direction": direction,
-            "scored": scored, "qualified": qualified}
+            "scored": scored, "qualified": qualified,
+            "event_blackout": (blackout if blacked else None)}
 
 
 def build_decision(cfg: dict, mgmt: dict) -> dict:
     min_score = float(cfg.get("min_score", 70))
     unis = _universes(cfg)
-    scans = [_scan_universe(u, cfg) for u in unis]
+    # v0.9.5: one bounded calendar read per cycle, only if some universe opted
+    # into the macro event blackout (fail-open -- see features.event_blackout).
+    blackout = (features.event_blackout(cfg)
+                if any(u.get("event_blackout") for u in unis) else None)
+    scans = [_scan_universe(u, cfg, blackout=blackout) for u in unis]
 
     # --- merge board + qualified pool across universes (mixed sides) ---
     all_scored = []
@@ -176,6 +199,10 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "circuit": circuit,
         "today_pnl": mgmt.get("today_pnl"),
         "open_count": mgmt.get("open_count", 0),
+        # v0.9.5: the active macro-event blackout ({event, ts, importance} or
+        # None) and which universes it suppressed this cycle.
+        "event_blackout": blackout,
+        "blackout_universes": [sc["name"] for sc in scans if sc.get("event_blackout")],
     }
     base_meta = {
         "regime_by_universe": regime_by_uni,
