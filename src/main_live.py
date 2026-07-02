@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.6"
+ANALYSIS_VERSION = "0.9.7"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -467,6 +467,11 @@ def run() -> None:
                  "controls_active": mgmt.get("controls_active", {}),
                  "loss_breaker": mgmt.get("loss_breaker", False),
                  "realized_window_pnl": mgmt.get("realized_window_pnl"),
+                 # v0.9.7 observability: the breaker's own arithmetic, emitted so
+                 # the SITREP never re-derives it (threshold = frac*margin*lev;
+                 # headroom = further realized loss to the trip point).
+                 "loss_breaker_threshold": mgmt.get("loss_breaker_threshold"),
+                 "loss_breaker_headroom": mgmt.get("loss_breaker_headroom"),
                  # v0.9.1 Phase-4 live journal: closed-trade realized records for
                  # live-vs-backtest reconciliation (accrues over cycles via metrics).
                  "fills_journal": mgmt.get("fills_journal", []),
