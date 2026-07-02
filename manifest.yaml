@@ -109,7 +109,11 @@ strategy_config:
   # maxDD falls in EVERY window (35d breakout -29.4%->-16.4%), net preserved at
   # ~0.75*breakeven_pct; a tiny "flat" lock is the worst choice (banks nothing yet
   # chokes runners). Recommended when armed: 1.5 (must stay < breakeven_pct).
-  breakeven_lock_pct: "0"
+  # ARMED 2026-07-02: enabling at 1.5 after the live MSTR give-back (peaked +$26,
+  # stopped -$3.75). Validated tail-cutting in every replay window and
+  # net-preserving; 1.5 is 0.75*breakeven_pct so it clears fees and banks a real
+  # win on a reversal without choking runners (a tiny flat lock was the worst).
+  breakeven_lock_pct: "1.5"
   sl_min_btc_eth_pct: "1.5"
   sl_min_sol_bnb_pct: "1.2"
   sl_min_alt_pct: "2.5"
