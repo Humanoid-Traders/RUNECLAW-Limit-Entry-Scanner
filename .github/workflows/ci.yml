@@ -1,0 +1,34 @@
+# RUNECLAW CI (v0.9.4, audit M-4): the test suite is the project's core
+# discipline ("no feature ships that fails the harness") -- it now runs on every
+# push/PR instead of on developer memory. Tests are self-running scripts by
+# design (each pins a live incident against real exchange shapes); the canonical
+# invocation is the same shell loop documented in README §9.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unit tests (network-free, getagent stubbed)
+        run: |
+          set -e
+          for f in tests/test_*.py; do
+            echo "== $f"
+            python3 "$f"
+          done
+      - name: Manifest lint (schema bounds + live-value cross-check)
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/lint_manifest.py manifest.yaml
+      - name: Hash manifest freshness
+        run: python3 scripts/refresh_hashes.py --check
+      - name: Byte-compile all sources
+        run: python3 -m compileall -q src research tests scripts

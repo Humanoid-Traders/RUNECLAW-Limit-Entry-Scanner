@@ -19,6 +19,10 @@ exits (SL / TP1 / time-stop) bar by bar, and reports aggregate stats.
 LIMITATIONS (read before trusting a number):
 - no order-book dimension (degraded) -> scores differ slightly from live
 - VWAP approximated as 24h close*volume / volume (engine uses the ticker VWAP)
+- REGIME GATE runs 2-of-2, not live's 2-of-3 (v0.9.4 audit B-1): taker_ratio is
+  passed as None here (no public taker history), so the gate needs BOTH the 24h
+  sign and the VWAP side. The replay gate is therefore STRICTER than live --
+  live will trade some regimes this harness never sampled.
 - TREND is reconstructed on 1h bars here, but live enrich uses 4h
   (trend_interval). The 1h gap-from-EMA is smaller, so this replay systematically
   UNDER-fires breakouts -- a 0/low breakout count here is partly a fidelity
@@ -39,9 +43,9 @@ Usage:
 """
 import argparse
 import json
-import subprocess
 import sys
 import types
+import urllib.request
 from pathlib import Path
 
 # --- import the REAL engine modules (stub getagent; they import it at module load) ---
@@ -65,11 +69,13 @@ BG = "https://api.bitget.com/api/v2/mix/market/candles"
 
 
 def fetch_klines(symbol, granularity="1H", limit=1000):
-    """Public Bitget mix candles -> list of [ts, o, h, l, c, baseVol, quoteVol] (oldest first)."""
+    """Public Bitget mix candles -> list of [ts, o, h, l, c, baseVol, quoteVol] (oldest first).
+    v0.9.4: stdlib urllib instead of shelling out to curl (an undeclared system
+    dependency); honors HTTPS_PROXY/CA env like curl did."""
     url = f"{BG}?symbol={symbol}&productType=usdt-futures&granularity={granularity}&limit={limit}"
     try:
-        out = subprocess.run(["curl", "-s", "--max-time", "30", url], capture_output=True, text=True, timeout=40).stdout
-        rows = json.loads(out).get("data") or []
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            rows = json.loads(resp.read().decode("utf-8")).get("data") or []
     except Exception as e:
         print(f"  ! fetch {symbol} failed: {e}"); return []
     bars = []

@@ -4,6 +4,38 @@ All notable changes to the RUNECLAW Limit Entry Scanner. Versions are the public
 versions assigned by the GetAgent `publish` step; the deployed instance runs the
 latest.
 
+## v0.9.4 — audit hardening (fail-closed gates, scoped ownership, CI)
+Full write-up: `docs/DESIGN_v0.9.4_audit_hardening.md`. Fixes from the 2026-07
+repository audit, safety-first order:
+- **S-1 fail-open closed:** a crashed (or never-run) `manage_open_state` now
+  yields a `state_blind` management snapshot, so `open_if_allowed` refuses to
+  place instead of reading a crash as a flat, gate-free book (`_safe_manage`).
+- **S-3 fail-open closed:** a failed `pending_orders` read (raise or error
+  envelope) now sets `state_blind` — an invisible resting-limit count can no
+  longer let the concurrency/correlation caps overshoot.
+- **S-2 scoped ownership:** destructive management (time-stop close, limit
+  cancel, stop modify, circuit flatten) is restricted to symbols the scanner can
+  actually open (universe candidates minus leaders); out-of-set records still
+  count toward the caps. Absent universe config = unrestricted (v0.6.7 lesson).
+- **S-4 scoped fills:** the loss breaker + live journal drop fills whose
+  notional is readable and above the ownership envelope; unreadable-size fills
+  are kept (fail-conservative — never blinds the breaker).
+- **C-1 scoring:** missing `quote_volume` is now a hard skip
+  (`no_volume_data`) — an unknown-liquidity name can no longer qualify.
+- **M-3 manifest:** `user_config_schema.max_scan_symbols` default 66 violated
+  its own `max: 28`; fixed, and `scripts/lint_manifest.py` now guards the class.
+- **CI:** `.github/workflows/ci.yml` runs the full test suite + manifest lint +
+  hash-manifest check on every push. New suites: mgmt-failopen, pending-blind,
+  ownership-scope, and the first direct math tests for scoring + risk
+  (91 assertions total across 15 suites).
+- Fallback defaults aligned with the manifest (`time_stop_hours` 12,
+  `trail_atr_mult` 2.0, `tp1/tp2` 5/15, `atr_limit_mult` 0.3); research fetchers
+  use stdlib urllib instead of shelling out to curl; exchange order ids redacted
+  from committed logs/audit artifacts; README synced to the armed loss breaker.
+
+> Note: v0.2.0 – v0.9.3 were documented in `docs/DESIGN_v0.*.md` rather than
+> here; this changelog resumes at v0.9.4.
+
 ## v0.1.18 — stale-limit expiry fix
 - Add snake_case `create_time` (and `c_time` / `update_time` variants) to
   `_OPEN_TIME_KEYS`. The SDK serializes records to snake_case, so order age was

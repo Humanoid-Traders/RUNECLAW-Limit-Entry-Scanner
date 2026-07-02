@@ -274,8 +274,8 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "funding": {"now": best.features.funding_now, "avg": best.features.funding_avg},
         "size_factor": plan.size_factor,
         "ladder": {
-            "tp1_pct": float(cfg.get("tp1_pct", "3.5")),
-            "tp2_pct": float(cfg.get("tp2_pct", "7.0")),
+            "tp1_pct": float(cfg.get("tp1_pct", "5.0")),
+            "tp2_pct": float(cfg.get("tp2_pct", "15.0")),
             "tp1_size": 0.5, "tp2_size": 0.25, "runner_size": 0.25,
             "trail_atr": plan.trail_atr, "breakeven_price": plan.breakeven_price,
         },
@@ -298,6 +298,23 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     }
 
 
+def _safe_manage(cfg: dict, follow: bool) -> dict:
+    """Management snapshot, or a BLIND fallback. v0.9.4 (audit S-1): only a
+    manage_open_state that RAN TO COMPLETION may authorize opens. The old
+    fallback ({"circuit": "ok"}) read as a flat book -- open_count 0, no
+    state_blind -- so a crash anywhere in the management layer silently disabled
+    the concurrency cap, the correlation budget, and the loss breaker while
+    still placing new entries. That is the same fail-open the v0.6.5 interlock
+    exists to stop, reintroduced one layer up. Now: management never ran, or
+    raised => state_blind => open_if_allowed refuses to ADD this cycle."""
+    if not follow:
+        return {"circuit": "ok", "state_blind": True, "mgmt_skipped": "not_follow_trade"}
+    try:
+        return execution.manage_open_state(cfg)
+    except Exception as exc:
+        return {"circuit": "ok", "state_blind": True, "mgmt_error": type(exc).__name__}
+
+
 def run() -> None:
     cfg = _cfg()
     try:
@@ -309,12 +326,7 @@ def run() -> None:
     except Exception:
         exec_mode = "?"
 
-    mgmt: dict = {"circuit": "ok"}
-    if follow:
-        try:
-            mgmt = execution.manage_open_state(cfg)
-        except Exception as exc:
-            mgmt = {"circuit": "ok", "mgmt_error": type(exc).__name__}
+    mgmt = _safe_manage(cfg, follow)
 
     decision = build_decision(cfg, mgmt)
     decision["meta"]["follow_trade"] = follow

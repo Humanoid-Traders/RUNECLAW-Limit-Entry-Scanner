@@ -1,5 +1,5 @@
 record_type,timestamp_utc,timestamp_ms,symbol,order_id,trade_id,side,trade_side,order_type,price,qty,notional_usdt,fee_usdt,pnl_usdt,status,dbg_string,notes
-ORDER,2026-06-24T05:03:02Z,1782277382029,ETHUSDT,1453542180542066689,,buy,open,limit,1650.71,0.42,693.30,,0,PENDING,,PENDING — unfilled as of 2026-06-24T06:55 UTC; expiry 09:03 UTC
+ORDER,2026-06-24T05:03:02Z,1782277382029,ETHUSDT,…6689,,buy,open,limit,1650.71,0.42,693.30,,0,PENDING,,PENDING — unfilled as of 2026-06-24T06:55 UTC; expiry 09:03 UTC
 DBG_CYCLE,2026-06-24T05:03:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own0-pT0-oP0-act0-c1p1-shp.code;message;data;trace_id>(,Entry order submitted this cycle; shp error cosmetic on empty-state close
 DBG_CYCLE,2026-06-24T05:18:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own1-pT1-oP1-act0-c0pX-none,Tracking resting order; no action
 DBG_CYCLE,2026-06-24T05:33:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own1-pT1-oP1-act0-c1p0-entry_already_pe,ETH already pending; new ETH candidate blocked
@@ -8,12 +8,12 @@ DBG_CYCLE,2026-06-24T06:03:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own1-pT1-oP1-act0-c0pX-n
 DBG_CYCLE,2026-06-24T06:18:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own1-pT1-oP1-act0-c1p0-entry_already_pe,ETH already pending; new candidate blocked
 DBG_CYCLE,2026-06-24T06:33:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own1-pT1-oP1-act0-c1p0-correlation_budg,Non-ETH candidate found; blocked by correlation budget
 DBG_CYCLE,2026-06-24T06:48:00Z,,ETHUSDT,,,,,,,,,,,CLOSE,own1-pT1-oP1-act0-c1p0-correlation_budg,Non-ETH candidate found; blocked by correlation budget
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445646,buy,close,,69.145,4.9,338.8105,-0.2032863,1.4455,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445644,buy,close,,69.145,20.0,1382.90,-0.82974,5.9,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445642,buy,close,,69.145,11.3,781.3385,-0.4688031,3.3335,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445640,buy,close,,69.145,0.2,13.829,-0.0082974,0.059,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445638,buy,close,,69.145,9.0,622.305,-0.373383,2.655,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445636,buy,close,,69.145,7.4,511.673,-0.3070038,2.183,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445634,buy,close,,69.145,10.6,732.937,-0.4397622,3.127,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,1451915700812754944,1451915701029445632,buy,close,,69.145,9.2,636.134,-0.3816804,2.714,filled,,Correctly excluded; size-scoping cap $1050
-FILL,2026-06-19T16:55:24Z,1781888124478,SOLUSDT,1451891711298088961,1451909516054241281,buy,open,,68.85,72.6,4998.51,-0.999702,0.0,filled,,Correctly excluded; size-scoping cap $1050; entry fill maker
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5646,buy,close,,69.145,4.9,338.8105,-0.2032863,1.4455,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5644,buy,close,,69.145,20.0,1382.90,-0.82974,5.9,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5642,buy,close,,69.145,11.3,781.3385,-0.4688031,3.3335,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5640,buy,close,,69.145,0.2,13.829,-0.0082974,0.059,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5638,buy,close,,69.145,9.0,622.305,-0.373383,2.655,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5636,buy,close,,69.145,7.4,511.673,-0.3070038,2.183,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5634,buy,close,,69.145,10.6,732.937,-0.4397622,3.127,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T17:19:59Z,1781889599091,SOLUSDT,…4944,…5632,buy,close,,69.145,9.2,636.134,-0.3816804,2.714,filled,,Correctly excluded; size-scoping cap $1050
+FILL,2026-06-19T16:55:24Z,1781888124478,SOLUSDT,…8961,…1281,buy,open,,68.85,72.6,4998.51,-0.999702,0.0,filled,,Correctly excluded; size-scoping cap $1050; entry fill maker
