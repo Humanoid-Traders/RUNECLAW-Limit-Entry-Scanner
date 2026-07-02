@@ -302,8 +302,9 @@ codebase was published as `0.6.8` on the deployment).
 ├── scripts/                   # manifest lint + hash-manifest tooling (CI)
 ├── .github/workflows/ci.yml   # CI: full test suite + manifest lint on every push
 ├── docs/                      # DESIGN_v0.2.0 … DESIGN_v0.9.4 (design history)
+│   └── legacy/                # quarantined prior-generation artifacts (v3.x —
+│                              #   code not in this repo; claims unverifiable)
 ├── audit/                     # security + API audits, file hashes
-├── backtest/                  # in-sample analysis
 └── logs/                      # trading log artifacts (order ids redacted)
 ```
 
