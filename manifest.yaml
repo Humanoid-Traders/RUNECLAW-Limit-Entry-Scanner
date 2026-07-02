@@ -132,7 +132,12 @@ strategy_config:
   # fields) -- same trial gate as margin_mode v0.6.4: arm at small size first,
   # watch the scale_out/so diag, then trust. Fail-closed everywhere; an
   # exchange reject is surfaced, never retried blind. Recommended when trialed: 0.5.
-  scaleout_frac: "0"
+  # ARMED 2026-07-02 (0.6.17): trial at the validated 0.5 -- bank half at +3.5%,
+  # the remainder rides the trail + ladder. This is the trial itself: the first
+  # live trim is the mapping proof (watch the scale_out action / so: diag; a
+  # reject or a fail-closed no-op is surfaced, never retried blind). Positions
+  # are already small ($60 margin/slot), which IS the small-size condition.
+  scaleout_frac: "0.5"
   scaleout_trigger_pct: "3.5"
   sl_min_btc_eth_pct: "1.5"
   sl_min_sol_bnb_pct: "1.2"
