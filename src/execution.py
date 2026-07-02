@@ -343,6 +343,31 @@ def _runeclaw_sized(record: dict, cfg: dict) -> bool:
     return notional <= budget * leverage * mult
 
 
+def _managed_symbols(cfg: dict) -> set:
+    """v0.9.4 (audit S-2): symbols RUNECLAW can actually OPEN -- each universe's
+    candidate list minus its own leader (mirrors main_live._universes /
+    _scan_universe). Size-scoped ownership alone adopts ANY account trade under
+    the ~$1,500 envelope, so a small manual position could be time-stop-closed,
+    trail-modified, or cancel-pruned by the bot. Destructive management actions
+    are therefore restricted to this set. Deliberately asymmetric: out-of-set
+    records still COUNT toward the concurrency/correlation caps (conservative --
+    fewer new entries), they are just never acted on. Returns an EMPTY set when
+    the cfg carries no symbol lists at all, which callers treat as "no
+    restriction" -- a missing universe config must never silently disable the
+    trail/time-stop (the v0.6.7 lesson)."""
+    default_syms = {str(s).upper() for s in (cfg.get("trading_symbols") or [])}
+    unis = [u for u in (cfg.get("universes") or []) if isinstance(u, dict)]
+    if not unis:
+        # legacy single-universe: candidates exclude the BTC leader
+        return default_syms - {"BTCUSDT"} if default_syms else set()
+    out: set = set()
+    for u in unis:
+        leader = str(u.get("leader", "BTCUSDT")).upper()
+        syms = {str(s).upper() for s in (u.get("symbols") or [])} or set(default_syms)
+        out |= (syms - {leader})
+    return out
+
+
 def _shape(value: Any, depth: int = 0) -> str:
     """Compact structural description of a result envelope, recursing one level
     into 'data', so a parse miss (rows present) vs an empty payload is visible."""
@@ -431,6 +456,29 @@ def _trailing_realized_pnl(window_hours: float) -> Optional[float]:
     if not rows:
         return None
     return _realized_pnl(rows, window_hours)
+
+
+def _scope_fills(rows: list, cfg: dict) -> list:
+    """v0.9.4 (audit S-4): drop fills whose notional is READABLE and exceeds the
+    ownership envelope (margin_budget * leverage * size_scope_mult) -- the user's
+    manual trades are ~10x larger, and unscoped they distort both consumers of
+    this read: a manual WIN masks bot losses (breaker fails to trip when it
+    should) and a manual LOSS trips it spuriously; the live journal is likewise
+    contaminated for live-vs-backtest reconciliation. Fail-CONSERVATIVE on shape:
+    a fill with unreadable qty/price is KEPT, so a serialization change can never
+    blind the breaker to real losses (it only ever errs toward more caution)."""
+    leverage = max(int(cfg.get("leverage", 10) or 10), 1)
+    budget = float(cfg.get("margin_budget", "100") or "100")
+    mult = float(cfg.get("size_scope_mult", "1.5"))
+    cap = budget * leverage * mult
+    out = []
+    for row in rows:
+        m = _to_mapping(row) or {}
+        notional = _record_notional(m)
+        if notional is not None and notional > cap:
+            continue
+        out.append(row)
+    return out
 
 
 _FILL_ID_KEYS = ("tradeId", "trade_id", "fillId", "fill_id", "orderId", "order_id")
@@ -542,6 +590,11 @@ def manage_open_state(cfg: dict) -> dict:
     except Exception as exc:
         pending_raw = None
         status["pending_error"] = type(exc).__name__
+        # v0.9.4 (audit S-3): an unreadable pending book makes open_count
+        # under-count resting limits, so the concurrency cap and correlation
+        # budget can overshoot during a bridge outage. Same rule as the
+        # position read (v0.6.5): unreadable => blind => no NEW entries.
+        status["state_blind"] = True
     # A non-raising error envelope (live shape: {code, message, data, trace_id})
     # must NOT be read as "no pending orders" -- that silently blinds limit-expiry
     # and the circuit cancel loop (the live pT0). Probe success and surface the
@@ -554,6 +607,10 @@ def manage_open_state(cfg: dict) -> dict:
             pending_ok = True
         if not pending_ok:
             status["pending_reason"] = _result_reason(pending_raw)
+            # v0.9.4 (audit S-3): a failed pending query blinds the open-gate
+            # exactly like a failed position query -- refuse to ADD while the
+            # resting-limit count is unknowable.
+            status["state_blind"] = True
     pending_records = _extract_rows(pending_raw) if pending_raw is not None else []
     status["pending_shape"] = _shape(pending_raw)[:40] if pending_raw is not None else "none"
 
@@ -594,6 +651,10 @@ def manage_open_state(cfg: dict) -> dict:
     journal_on = str(cfg.get("journal_enabled", "true")).strip().lower() not in ("false", "0", "no", "")
     if lb_frac > 0 or journal_on:
         fills_rows = _read_fills()  # one read serves both the breaker and the journal
+        # v0.9.4 (audit S-4): scope out oversized (manual) fills before either
+        # consumer sees them; unreadable-size fills are kept (fail-conservative).
+        if fills_rows:
+            fills_rows = _scope_fills(fills_rows, cfg) or None
         # v0.9.1 Phase-4 live journal: emit recent closed-trade realized records so
         # live results can be reconciled against the backtest (audit #30). Read-only.
         if journal_on and fills_rows:
@@ -632,10 +693,15 @@ def manage_open_state(cfg: dict) -> dict:
 def _flatten_owned(cfg: dict, owned_position_records: list, owned_pending_records: list,
                    actions: list) -> None:
     """Circuit hard-stop: cancel ONLY RUNECLAW-sized resting orders + close ONLY
-    RUNECLAW-sized positions. Never touches the user's larger manual trades."""
+    RUNECLAW-sized positions. Never touches the user's larger manual trades.
+    v0.9.4 (audit S-2): additionally never touches symbols outside the scan
+    universes -- the bot cannot have opened those."""
+    allowed = _managed_symbols(cfg)
     for rec in owned_pending_records:
         symbol = _find_string(rec, ("symbol",))
         order_id = _find_string(rec, ("orderId", "order_id", "clientOid"))
+        if allowed and symbol.upper() not in allowed:
+            continue
         if symbol and order_id:
             try:
                 trade.contract.cancel_order(symbol=symbol, order_id=order_id)
@@ -646,6 +712,8 @@ def _flatten_owned(cfg: dict, owned_position_records: list, owned_pending_record
     for record in owned_position_records:
         symbol = _find_string(record, ("symbol",))
         hold_side = _find_string(record, _HOLD_SIDE_KEYS)
+        if allowed and symbol.upper() not in allowed:
+            continue
         if symbol and hold_side:
             try:
                 trade.contract.close_position(symbol=symbol, hold_side=hold_side)
@@ -655,7 +723,7 @@ def _flatten_owned(cfg: dict, owned_position_records: list, owned_pending_record
 
 
 def _best_effort_position_controls(cfg: dict, records: list, status: dict, actions: list) -> None:
-    max_age_h = float(cfg.get("time_stop_hours", "4"))
+    max_age_h = float(cfg.get("time_stop_hours", "12"))  # default aligned with manifest (v0.9.4)
     be_trigger_usdt = float(cfg.get("breakeven_trigger_usdt", "20"))
     be_trigger_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
     now_ms = _now_ms()
@@ -665,6 +733,12 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
     # even parsed) so the never-yet-observed exit machinery is visible when a fill
     # finally runs -- the position analogue of the xpd limit-expiry diagnostic.
     diags = []
+    # v0.9.4 (audit S-2): destructive actions (time-stop close, trail/BE stop
+    # modify) only on symbols the bot can actually open. A small manual position
+    # in an out-of-universe name still counts toward the caps (conservative) but
+    # is never closed or re-stopped by the bot. Empty set => no restriction
+    # (missing universe config must never disable management -- v0.6.7 lesson).
+    allowed = _managed_symbols(cfg)
     for record in records:
         symbol = _find_string(record, ("symbol",))
         hold_side = _find_string(record, _HOLD_SIDE_KEYS)
@@ -672,6 +746,10 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
             continue
 
         diag = {"sym": symbol, "side": hold_side.lower()}
+        if allowed and symbol.upper() not in allowed:
+            diag["note"] = "unmanaged_symbol"
+            diags.append(diag)
+            continue
 
         # Intraday time-stop (best effort: requires a parseable open time).
         # v0.6.1: coerce any open-time shape (ISO string / epoch s / ms / datetime)
@@ -716,7 +794,7 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
         # it subsumes auto-breakeven (the trail crosses entry as price runs). With
         # trail_atr_mult <= 0 the trail is disabled and the old breakeven-only
         # behaviour applies.
-        if float(cfg.get("trail_atr_mult", "1.0")) > 0:
+        if float(cfg.get("trail_atr_mult", "2.0")) > 0:
             # v0.6.4: _trail_stop records WHY it acted / no-op'd into diag["trail"]
             # (no_atr / no_sl_order / no_sl_trigger / hold:<trail>v<cur> / tick /
             # modify_err:<msg> / set:<price>) so a silently-inert trail is visible
@@ -766,7 +844,7 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
             diag["trail"] = reason
         return False
 
-    tmult = float(cfg.get("trail_atr_mult", "1.0"))
+    tmult = float(cfg.get("trail_atr_mult", "2.0"))
     if tmult <= 0 or not current or current <= 0:
         return _why("off")
     # Recompute ATR live; no ATR -> no trail this cycle (fail-safe).
@@ -834,10 +912,14 @@ def _best_effort_limit_expiry(cfg: dict, owned_pending_records: list, actions: l
     max_age_h = float(cfg.get("limit_expiry_hours", "4"))
     chase_pct = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
     now_ms = _now_ms()
+    # v0.9.4 (audit S-2): cancel only orders on symbols the bot can open.
+    allowed = _managed_symbols(cfg)
     for record in owned_pending_records:
         symbol = _find_string(record, ("symbol",))
         order_id = _find_string(record, ("orderId", "order_id", "clientOid"))
         if not symbol or not order_id:
+            continue
+        if allowed and symbol.upper() not in allowed:
             continue
 
         # 1) Time-based expiry. v0.4.3: read the open-time value RAW, then coerce
@@ -990,7 +1072,7 @@ def open_if_allowed(decision: dict, cfg: dict, mgmt: dict) -> dict:
     # v0.6.3: when the trailing stop is active, attach the WIDER tp2 as a backstop
     # so the ratcheting trail (not a tight tp1) governs the upside; trail off keeps
     # tp1 (pre-v0.6.3 behaviour).
-    tp_attach = (plan.get("tp2") or tp1) if float(cfg.get("trail_atr_mult", "1.0")) > 0 else tp1
+    tp_attach = (plan.get("tp2") or tp1) if float(cfg.get("trail_atr_mult", "2.0")) > 0 else tp1
 
     # Duplicate guard: skip if already in a position or already resting an entry.
     # Best-effort ONLY -- a parse/type error here must never block an entry. The

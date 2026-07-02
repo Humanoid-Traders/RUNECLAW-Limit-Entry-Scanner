@@ -222,7 +222,9 @@ user_config_schema:
     label: "Max loss per trade USDT (drives position size from the stop)"
   max_scan_symbols:
     type: integer
-    default: 66
+    # v0.9.4 (audit M-3): default was 66 with max 28 -- the default violated its
+    # own bound. Align with strategy_config.max_scan_symbols (28).
+    default: 28
     min: 5
     max: 28
     label: "Symbols scanned per pass"

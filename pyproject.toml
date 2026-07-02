@@ -1,0 +1,16 @@
+# Packaging identity + tooling metadata (v0.9.4, audit hygiene).
+# Runtime dependencies are deliberately empty: the live package uses only the
+# Python stdlib plus the runner-provided `getagent` SDK (never installed from
+# PyPI). PyYAML is a dev-only dependency of scripts/lint_manifest.py.
+# NOTE: tests are self-running scripts (python3 tests/test_<x>.py), not a pytest
+# session -- each installs its own getagent stub at import time and they are not
+# safe to collect into one shared process. CI runs the canonical shell loop.
+[project]
+name = "runeclaw-limit-entry-scanner"
+version = "0.9.4"
+description = "Deterministic multi-asset perpetual-futures scanner (GetAgent/Bitget playbook)"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+
+[project.optional-dependencies]
+dev = ["pyyaml"]

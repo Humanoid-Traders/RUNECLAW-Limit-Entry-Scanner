@@ -31,8 +31,8 @@ All endpoints within Bitget v2 rate limits at a 15-minute scan cadence.
 
 ### SOLUSDT (verified — real fills from `tradesdk_contract_fills`, pulled 2026-06-24T06:55 UTC)
 
-**Entry:** order `1451891711298088961` — buy/open — 72.6 SOL @ $68.85 — maker — notional $4,998.51  
-**Close:** order `1451915700812754944` — buy/close — 8 partial fills @ $69.145 — taker
+**Entry:** order `…8961` (id redacted) — buy/open — 72.6 SOL @ $68.85 — maker — notional $4,998.51  
+**Close:** order `…4944` (id redacted) — buy/close — 8 partial fills @ $69.145 — taker
 
 | Fill # | Qty (SOL) | Notional | Fee | PnL |
 |--------|-----------|----------|-----|-----|
@@ -51,7 +51,7 @@ All endpoints within Bitget v2 rate limits at a 15-minute scan cadence.
 
 ### ETHUSDT (no verified fill data)
 
-One pending limit buy: order `1453542180542066689`, 0.42 ETH @ $1,650.71, notional $693.30, unfilled as of 2026-06-24T06:55 UTC. Expiry 09:03 UTC.  
+One pending limit buy: order `…6689` (id redacted, v0.9.4 audit), 0.42 ETH @ $1,650.71, notional $693.30, unfilled as of 2026-06-24T06:55 UTC. Expiry 09:03 UTC.  
 No ETH fill rows exist in account history. No ETH PnL to report. This section will be updated if/when the order fills or expires.
 
 ---

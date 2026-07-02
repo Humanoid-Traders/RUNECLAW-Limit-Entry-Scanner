@@ -1,6 +1,6 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** · GetAgent playbook `runeclaw-limit-scanner` · codebase **v0.9.1** · `decision_mode: deterministic`
+**Live on Bitget** · GetAgent playbook `runeclaw-limit-scanner` · codebase **v0.9.4** · `decision_mode: deterministic`
 
 > A two-sided, **multi-asset** perpetual-futures scanner across **crypto, equities (RWA stock perps), and commodities (precious metals)** — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold), ranked by a blended deterministic score, and entered with resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it, trades with the prevailing regime, and treats capital preservation as the first job.
 
@@ -101,13 +101,20 @@ control variable; everything else is derived from it.
 | Limit expiry | 4h | `limit_expiry_hours` — cancels unfilled resting orders (checked per scan cycle) |
 | Chase-cancel | 3% | `limit_chase_pct` — drops a limit the market ran away from |
 | Ownership scope | $1,500 notional | `margin_budget × leverage × size_scope_mult`; positions above this are never adopted |
-| Realized-loss breaker | opt-in (default off) | `loss_breaker_frac` — pauses new entries after a trailing-window realized-loss streak (§6) |
+| Realized-loss breaker | **armed** (0.08, since v0.9.3) | `loss_breaker_frac` — pauses new entries after a trailing-window realized-loss streak (§6); set 0 to disable |
 | Margin mode | crossed (default) | `margin_mode`; isolated is an opt-in, trial-gated path (untested live) |
 
 **Ownership is stateless and size-scoped.** `.state/` does not persist between
 scheduled runs, so ownership is recomputed every cycle from live exchange state,
 scoped to RUNECLAW's own envelope. Any position whose notional exceeds the scope
-cap is excluded — the agent never adopts a larger, manually-placed trade.
+cap is excluded — the agent never adopts a larger, manually-placed trade. Since
+v0.9.4, destructive management (time-stop close, limit cancel, stop modify) is
+additionally restricted to symbols the scanner can actually open (universe
+candidates minus leaders): a small manual trade in another name still counts
+toward the caps but is never closed or re-stopped by the bot. The loss breaker
+and live journal read only RUNECLAW-envelope-sized fills. And the open-gate is
+fail-closed: if the management layer crashes, or the position *or* pending-order
+read fails, the cycle is `state_blind` and no new entry is placed.
 
 **Two honest notes on the safety stack:**
 
@@ -116,8 +123,9 @@ cap is excluded — the agent never adopts a larger, manually-placed trade.
   day-start equity value persisting across runs, but `.state/` is ephemeral
   (`state_runs` stays at 1). Its working replacement is the **stateless
   realized-loss breaker** (v0.8.0), which sources trailing realized P&L from
-  exchange fills — no local persistence required. It ships **opt-in / default
-  off**; set `loss_breaker_frac = 0.08` to arm it.
+  exchange fills — no local persistence required. **Armed by default since
+  v0.9.3** (`loss_breaker_frac = 0.08`, the validated setting); set it to 0 to
+  disable.
 - **Margin mode is crossed by default.** Earlier documentation claimed isolated
   margin was enforced; it never was (verified). The opt-in isolated path exists
   (v0.6.4) but is untested live, so the proven default is crossed. Per-trade loss
@@ -257,7 +265,7 @@ time_stop_hours: "12"     # force-close after this long
 limit_expiry_hours: "4"   # cancel unfilled resting limits
 limit_chase_pct: "3.0"    # chase-cancel threshold
 size_scope_mult: "1.5"    # ownership cap = margin_budget × leverage × this = $1,500
-loss_breaker_frac: "0"    # realized-loss breaker (0 = off; 0.08 validated)
+loss_breaker_frac: "0.08" # realized-loss breaker (armed since v0.9.3; 0 = off)
 journal_enabled: "true"   # live trade journal emission
 margin_mode: "crossed"    # isolated is an opt-in, trial-gated path
 kline_interval: "1h"      # ATR timeframe (Wilder, atr_period 14)
@@ -265,8 +273,8 @@ trend_interval: "4h"      # higher-TF trend
 ```
 
 The GetAgent control plane computes its own published semver on publish, so the
-live instance version label may differ from `manifest.version` (the v0.9.1
-codebase is published as `0.6.8` on the deployment).
+live instance version label may differ from `manifest.version` (e.g. the v0.9.1
+codebase was published as `0.6.8` on the deployment).
 
 ---
 
@@ -291,11 +299,13 @@ codebase is published as `0.6.8` on the deployment).
 │   ├── analytics.py           # expectancy / PF / MAE-MFE / capture / tail
 │   └── live_journal.py        # reduce live journal records → live metrics
 ├── tests/                     # network-free unit tests (getagent stubbed)
-├── docs/                      # DESIGN_v0.2.0 … DESIGN_v0.9.2 (design history)
+├── scripts/                   # manifest lint + hash-manifest tooling (CI)
+├── .github/workflows/ci.yml   # CI: full test suite + manifest lint on every push
+├── docs/                      # DESIGN_v0.2.0 … DESIGN_v0.9.4 (design history)
 │   └── legacy/                # quarantined prior-generation artifacts (v3.x —
 │                              #   code not in this repo; claims unverifiable)
 ├── audit/                     # security + API audits, file hashes
-└── logs/                      # trading log artifacts
+└── logs/                      # trading log artifacts (order ids redacted)
 ```
 
 ---
@@ -306,8 +316,11 @@ The full test suite is **network-free** (the `getagent` SDK is stubbed) and pins
 every fix against real exchange-response shapes captured live:
 
 ```bash
-# run the whole suite
+# run the whole suite (CI runs the same loop on every push — see .github/workflows/ci.yml)
 for f in tests/test_*.py; do python3 "$f"; done
+
+# lint the manifest (schema bounds + live-value cross-check)
+python3 scripts/lint_manifest.py manifest.yaml
 
 # validate the package before upload (allowed paths only)
 python3 <getagent-skill>/scripts/validate.py .
@@ -335,7 +348,7 @@ local validation; no feature is shipped that fails the harness.**
   keep an intra-trade high-water track, so the live journal records realized P&L
   only; excursion metrics stay backtest-only.
 - **Equity circuit breaker is non-functional** (`.state/` ephemeral) — superseded
-  by the stateless realized-loss breaker, which is opt-in.
+  by the stateless realized-loss breaker (armed by default since v0.9.3).
 - **Crossed margin by default** — isolated is an untested opt-in path.
 - **No news/event filter** — RWA equity perps can gap on earnings/macro prints.
 - **Strategy sits idle by design** — when leaders chop without direction it opens
@@ -366,7 +379,7 @@ local validation; no feature is shipped that fails the harness.**
 - 每笔最大亏损由 `max_loss_usdt` 控制，仓位由止损距离反推。
 - 杠杆可调（默认 10x，最高 25x）；更高杠杆会同时放大盈利与回撤。
 - **基于 `.state/` 的当日权益熔断在当前运行环境中不生效**（`.state/` 不持久化），其替代是
-  **无状态的已实现亏损熔断**（v0.8.0，默认关闭，`loss_breaker_frac=0.08` 开启）。
+  **无状态的已实现亏损熔断**（v0.8.0；自 v0.9.3 起默认开启，`loss_breaker_frac=0.08`，设为 0 可关闭）。
 - 限制最大并发持仓与相关性敞口；持仓所有权按规模范围界定，绝不接管更大的人工仓位。
 - **默认全仓（crossed）保证金**；逐仓为未实测的可选路径。
 - 在领头标的无方向震荡、或快速行情击穿止损时表现较差，按设计可能长时间空仓。

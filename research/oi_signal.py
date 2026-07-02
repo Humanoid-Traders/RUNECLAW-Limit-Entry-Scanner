@@ -16,8 +16,8 @@ Usage: python3 research/oi_signal.py --days 18 --window 6
 """
 import argparse
 import json
-import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,9 +31,8 @@ def fetch_oi(symbol, period="1h", limit=500):
     """Binance OI history -> [(ts_ms, oi_usd), ...] oldest first. [] on failure."""
     url = f"{BINANCE}?symbol={symbol}&period={period}&limit={limit}"
     try:
-        out = subprocess.run(["curl", "-s", "--max-time", "30", url],
-                             capture_output=True, text=True, timeout=40).stdout
-        rows = json.loads(out)
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return []
     if not isinstance(rows, list):
@@ -72,7 +71,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=18)
     ap.add_argument("--window", type=int, default=6, help="trailing hours for OI trend")
-    ap.add_argument("--breakout", action="store_true", default=True)
+    # v0.9.4 (audit): was `store_true` with default=True -- an inert flag that
+    # could never be turned off. Breakout stays the default; --no-breakout works.
+    ap.add_argument("--breakout", dest="breakout", action="store_true", default=True)
+    ap.add_argument("--no-breakout", dest="breakout", action="store_false")
     ap.add_argument("--symbols", nargs="*", default=[
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT",
         "ADAUSDT", "LINKUSDT", "AVAXUSDT", "NEARUSDT", "INJUSDT", "SEIUSDT"])
