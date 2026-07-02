@@ -263,6 +263,89 @@ def fetch_funding(symbol: str, interval: str = "1h", limit: int = 8,
     return (rates[-1], sum(rates) / len(rates), True)
 
 
+# --- v0.9.5 macro event blackout (RWA equity gap risk; audit finding) --------
+# RWA equity perps track underlying stocks that gap on high-importance US macro
+# prints (FOMC, CPI, NFP); the SL/trail are tuned on crypto's continuous tape.
+# This guard suppresses NEW entries for opted-in universes inside a window
+# around such events. Opt-in (event_blackout_hours 0 = off) and FAIL-OPEN: an
+# unreadable calendar never blocks trading -- the guard only ever adds caution
+# when the data affirmatively shows an event.
+
+_EVENT_TS_KEYS = ("date", "time", "timestamp", "datetime")
+
+
+def _parse_event_ts(value: Any) -> Optional[float]:
+    """Event timestamp -> epoch ms. Accepts epoch s/ms or an ISO-8601 string
+    (with or without timezone; naive strings are treated as UTC). None if
+    unparseable (that event is simply ignored -- fail-open per event)."""
+    num = _f(value)
+    if num is not None and num > 0:
+        return num * 1000.0 if num < 10_000_000_000 else num
+    if not isinstance(value, str) or not value.strip():
+        return None
+    from datetime import datetime, timezone
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp() * 1000.0
+
+
+def _blackout_event(events: list, now_ms: float, window_h: float,
+                    importance: str) -> Optional[dict]:
+    """First event within +/- window_h of now whose importance matches
+    (case-insensitive substring, so 'high' matches 'High'; '3' matches '3').
+    Pure -> unit-testable. Returns {'event', 'ts', 'importance'} or None."""
+    if window_h <= 0:
+        return None
+    win_ms = window_h * 3_600_000.0
+    imp_want = str(importance or "").strip().lower()
+    for row in events:
+        if not isinstance(row, dict):
+            continue
+        imp = str(row.get("importance", "")).strip().lower()
+        if imp_want and imp_want not in imp:
+            continue
+        ts = None
+        for k in _EVENT_TS_KEYS:
+            if k in row:
+                ts = _parse_event_ts(row.get(k))
+                if ts is not None:
+                    break
+        if ts is None or abs(ts - now_ms) > win_ms:
+            continue
+        return {"event": str(row.get("event", "?"))[:48], "ts": ts,
+                "importance": str(row.get("importance", ""))[:16]}
+    return None
+
+
+def event_blackout(cfg: dict) -> Optional[dict]:
+    """The active macro-event blackout, or None. One bounded calendar call per
+    cycle, made only when the guard is enabled. FAIL-OPEN on any failure."""
+    try:
+        window_h = float(cfg.get("event_blackout_hours", "0") or "0")
+    except (TypeError, ValueError):
+        window_h = 0.0
+    if window_h <= 0:
+        return None
+    country = str(cfg.get("event_blackout_country", "US"))
+    importance = str(cfg.get("event_blackout_importance", "high"))
+    from datetime import datetime, timezone
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+    win_ms = window_h * 3_600_000.0
+    try:
+        obb = data.economy.calendar(start_time=int(now_ms - win_ms),
+                                    end_time=int(now_ms + win_ms),
+                                    country=country, importance=importance)
+        events = [r for r in _to_records(obb) if isinstance(r, dict)]
+    except Exception:
+        return None  # unreadable calendar -> no blackout (fail-open)
+    return _blackout_event(events, now_ms, window_h, importance)
+
+
 def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> SymbolFeatures:
     """Pass-2: populate kline (ATR + trend) and funding fields on ``feats``.
 
