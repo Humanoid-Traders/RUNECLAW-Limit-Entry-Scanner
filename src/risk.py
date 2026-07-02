@@ -55,10 +55,10 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
         atr = feats.atr
     else:
         atr = max((high - low) / 2.5, 0.0)
-    atr_mult = float(cfg.get("atr_limit_mult", "0.5"))
-    tp1_pct = float(cfg.get("tp1_pct", "3.5")) / 100.0
-    tp2_pct = float(cfg.get("tp2_pct", "7.0")) / 100.0
-    trail_atr = float(cfg.get("trail_atr_mult", "1.0")) * atr
+    atr_mult = float(cfg.get("atr_limit_mult", "0.3"))   # defaults aligned with manifest (v0.9.4)
+    tp1_pct = float(cfg.get("tp1_pct", "5.0")) / 100.0
+    tp2_pct = float(cfg.get("tp2_pct", "15.0")) / 100.0
+    trail_atr = float(cfg.get("trail_atr_mult", "2.0")) * atr
     be_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
     sl_min = _sl_min_fraction(feats.symbol, cfg)
 

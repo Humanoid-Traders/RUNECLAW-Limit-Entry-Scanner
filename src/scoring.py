@@ -193,8 +193,16 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
         dims["orderbook"] = orderbook_score
 
         # Volume 0-15 (cross-sectional) + thin-liquidity disqualifier.
+        # v0.9.4 (audit C-1): MISSING volume data is a disqualifier too. The old
+        # `is not None and < min_vol` let a symbol whose quote_volume failed to
+        # parse sail past the liquidity floor with neutral scores -- an
+        # unknown-liquidity name could qualify. Missing data is never guessed
+        # (the features.py rule); it must not be traded either.
         quote_volume = f.quote_volume
-        if quote_volume is not None and quote_volume < min_vol:
+        if quote_volume is None:
+            skip = True
+            reason = reason or "no_volume_data"
+        elif quote_volume < min_vol:
             skip = True
             reason = reason or "thin_volume"
         if quote_volume is None or vol_max <= vol_min:
