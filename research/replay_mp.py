@@ -188,6 +188,13 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     # v0.9.7 candidate C -- time-stop profit guard: 12h clock closes losers/flats
     # only; a position in profit keeps riding the trail (the trail/locks govern).
     tstop_guard = str(cfg.get("tstop_guard", "0")).strip() in ("1", "true", "yes")
+    # v0.9.9 candidate -- signal-strength preemption: when the slot/correlation
+    # budget is full, allow a fresh candidate whose score beats the WEAKEST resting
+    # limit by >= preempt_delta to cancel-and-replace it (never a filled position).
+    # Targets the live 2026-07-03 lockup: two unfilling limits (TSLA 86q + demoted
+    # TAO) held the 2-slot budget ~4h while MSTR printed 100q untraded. 0 => off =
+    # first-come-first-served (the current live behavior / control).
+    preempt_delta = float(cfg.get("preempt_delta", "0"))
 
     def _lock_floor(move_pct):
         """Highest armed protective floor (fraction of entry) given the ladder,
@@ -228,7 +235,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     opens = []   # {sym, side, mode, fill_px, sl, tp1, atr, fill_i, hw, trail}
     pends = []   # {sym, side, entry, placed_i, plan}
     trades = []; n_sig = 0; n_chase = 0; n_expire = 0; n_fill = 0
-    n_corr_block = 0; n_heat_block = 0; n_loss_block = 0; n_chop_block = 0
+    n_corr_block = 0; n_heat_block = 0; n_loss_block = 0; n_chop_block = 0; n_preempt = 0
 
     def close(p, px, why, at):
         long = p["side"] == "long"
@@ -311,7 +318,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                 pl = q["plan"]; n_fill += 1
                 opens.append({"sym": q["sym"], "side": q["side"], "mode": "pullback",
                               "fill_px": q["entry"], "sl": pl.sl_price, "tp1": pl.tp1, "tp2": pl.tp2,
-                              "atr": pl.atr or 0.0, "fill_i": i, "hw": q["entry"], "trail": pl.sl_price})
+                              "atr": pl.atr or 0.0, "fill_i": i, "hw": q["entry"], "trail": pl.sl_price,
+                              "score": q.get("score", 0.0)})
                 continue
             run = ((c - q["entry"]) / q["entry"]) if long else ((q["entry"] - c) / q["entry"])
             if run > chase: n_chase += 1; continue
@@ -322,7 +330,17 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         # 3) consider a new entry under the slot + correlation caps
         held = [(p["sym"], p["side"]) for p in opens] + [(q["sym"], q["side"]) for q in pends]
         owned = [h[0] for h in held]
-        if len(owned) >= max_conc:
+        # v0.9.9: compute whether the budget is full, but DEFER the block -- with
+        # preemption on we still select the best candidate below and, if it clears
+        # the delta over the weakest resting limit, replace it. delta 0 hard-blocks
+        # exactly as before (control), so this is a strict superset of old behavior.
+        blocked = len(owned) >= max_conc
+        if not blocked and corr_budget <= 0:
+            max_corr = max_corr_base
+            if any(s in ("BTCUSDT", "ETHUSDT") for s in owned):
+                max_corr = min(max_corr, 1)
+            blocked = len(set(owned)) >= max_corr
+        if blocked and preempt_delta <= 0:
             continue
         # v0.8.1 aggregate-heat breaker: if the open book is collectively underwater
         # past the threshold, stand aside this cycle (don't add to a bleeding book).
@@ -340,13 +358,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             if recent <= -loss_pause:
                 n_loss_block += 1
                 continue
-        if corr_budget <= 0:
-            # legacy Rule-7 count cap (treat every alt as BTC-correlated)
-            max_corr = max_corr_base
-            if any(s in ("BTCUSDT", "ETHUSDT") for s in owned):
-                max_corr = min(max_corr, 1)
-            if len(set(owned)) >= max_corr:
-                continue
+        # (the legacy count cap is folded into `blocked` above so preemption can act on it)
         # corr_budget > 0: the weighted gate is applied below, once the candidate
         # symbol+side is known (it depends on which name we'd actually open).
         lead = R.recon_features(leader, kl[leader][i - 24:i + 1])
@@ -383,18 +395,30 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side, entry_mode=best.entry_mode)
         if plan is None or not plan.sizing_ok:
             continue
+        # v0.9.9 preemption resolution: if we reached here while the budget was full,
+        # the fresh candidate must beat the WEAKEST resting limit by >= preempt_delta
+        # to justify the cancel-and-replace churn. A budget full of FILLED positions
+        # is never preempted (we don't close a live trade for a signal).
+        if blocked:
+            if not pends:
+                continue
+            weakest = min(pends, key=lambda q: q.get("score", 0.0))
+            if best.score < weakest.get("score", 0.0) + preempt_delta:
+                continue
+            pends.remove(weakest); n_preempt += 1
         n_sig += 1
         if plan.entry_mode == "breakout":
             opens.append({"sym": best.symbol, "side": best.side, "mode": "breakout",
                           "fill_px": best.features.last, "sl": plan.sl_price, "tp1": plan.tp1, "tp2": plan.tp2,
-                          "atr": plan.atr or 0.0, "fill_i": i, "hw": best.features.last, "trail": plan.sl_price})
+                          "atr": plan.atr or 0.0, "fill_i": i, "hw": best.features.last, "trail": plan.sl_price,
+                          "score": best.score})
         else:
             cur = best.features.last
             gap = ((plan.entry - cur) / plan.entry) if best.side == "short" else ((cur - plan.entry) / plan.entry)
             if gap > chase:
                 continue  # pre-placement staleness skip (entry_too_far)
             pends.append({"sym": best.symbol, "side": best.side, "entry": plan.entry,
-                          "placed_i": i, "plan": plan})
+                          "placed_i": i, "plan": plan, "score": best.score})
 
     # force-close any still-open positions at the last bar so stats are unbiased
     last = n - 1
@@ -404,7 +428,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     return {"n_sig": n_sig, "n_fill": n_fill, "n_chase": n_chase, "n_expire": n_expire,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
-            "trades": trades, "max_open": max_conc}
+            "n_preempt": n_preempt, "trades": trades, "max_open": max_conc}
 
 
 def report(tag, st):
@@ -413,7 +437,8 @@ def report(tag, st):
     print(f"  entries placed  : {st['n_sig']}   pullback fills: {st.get('n_fill','?')}   "
           f"chase: {st['n_chase']}   expire: {st['n_expire']}   "
           f"corr-block: {st.get('n_corr_block', 0)}   heat-block: {st.get('n_heat_block', 0)}   "
-          f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}")
+          f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}   "
+          f"preempt: {st.get('n_preempt', 0)}")
     print(f"  trades closed   : {len(t)}  (incl. forced end-of-window closes)")
     if not t:
         return
@@ -461,6 +486,11 @@ def main():
                     help="rising lock ladder 'arm:lock,arm:lock' in %% of entry (empty=off)")
     ap.add_argument("--tstop-guard", default="0",
                     help="1 = the time-stop only closes losers/flats; winners keep the trail")
+    ap.add_argument("--preempt", default="0",
+                    help="signal-strength preemption: a fresh candidate beating the weakest "
+                         "resting limit by >= this many score points cancel-replaces it (0=off)")
+    ap.add_argument("--ab-preempt", action="store_true",
+                    help="A/B first-come-first-served vs a sweep of preemption deltas")
     ap.add_argument("--ab-exitpack", action="store_true",
                     help="A/B the v0.9.7 exit candidates vs the live v0.9.6 baseline (trail+belock 1.5)")
     ap.add_argument("--time-stop", default="4")
@@ -508,6 +538,7 @@ def main():
         "er_floor": a.er_floor, "er_lookback": a.er_lookback, "leader": a.leader,
         "breakeven_lock_pct": a.be_lock, "scaleout_frac": a.scaleout,
         "steplock": a.steplock, "tstop_guard": a.tstop_guard,
+        "preempt_delta": a.preempt,
     }
     fetch_syms = list(dict.fromkeys(list(a.symbols) + [a.leader]))  # leader must be fetched too
     data = R.fetch_all(fetch_syms, a.days)
@@ -552,6 +583,18 @@ def main():
             st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
             if st:
                 report(("NO gate" if er == "0" else f"er-floor={er}") + "  " + base, st)
+        print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
+        return
+    if a.ab_preempt:
+        # first-come-first-served vs signal-strength preemption. Watch fills and
+        # PnL (does reallocating the budget to stronger signals pay?) AND the
+        # preempt count (churn cost) -- a delta too small thrashes the book, too
+        # large never fires. The live lockup motivated this; the sweep generalizes it.
+        for pd in ("0", "5", "10", "15", "20"):
+            cfg2 = dict(cfg); cfg2["preempt_delta"] = pd
+            st = simulate_mp(cfg2, a.symbols, a.days, a.breakout, data=data)
+            if st:
+                report(("FCFS (no preempt)" if pd == "0" else f"preempt-delta={pd}q") + "  " + base, st)
         print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
         return
     if a.ab_exitpack:
