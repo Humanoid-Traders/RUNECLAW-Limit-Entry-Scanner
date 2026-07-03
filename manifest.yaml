@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.14"
+version: "0.9.15"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -94,7 +94,22 @@ strategy_config:
   # (protective direction only, fail-safe no-op); tp2 is a WIDE backstop so the
   # trail isn't capped (a tight backstop erased the edge in validation). Longer
   # time_stop_hours gives the trail room. See docs/DESIGN_v0.6.3.md.
-  tp2_pct: "15.0"
+  # v0.9.15 — widened 15 -> 20 (strategy-sweep winner, re-reproduced serially here;
+  # the harness is deterministic serially -- repeat runs are byte-identical). This
+  # un-caps the WIDE backstop the trail is supposed to ride behind: at 15 a few
+  # breakout runners were force-taken at +15% instead of trailed further. Controlled
+  # A/B (only tp2 changed, full live stack) -- tp2=20 weakly DOMINATES tp2=15 in all
+  # three windows, tail dead-flat everywhere, never worse on any metric:
+  #   A 35d-breakout (primary): 73t +17.8% PF1.26 -> 74t +18.6% PF1.27  (+0.8pt net,
+  #     +1 trade, +0.01 PF; maxDD -13.8% & worst-trade -6.2% UNCHANGED)
+  #   B 21d-breakout:           42t +7.2% PF1.24  -> 42t +7.4% PF1.25   (+0.2pt, tail flat)
+  #   C 35d-pullback:           30t +15.1% PF1.88 -> identical (fully inert)
+  # Plateau step: tp2=10==15 and tp2=25==20 (the cap only binds between). NOTE the
+  # real primary gain is ~+0.8pt (a handful of breakout-tail trades), NOT the +3.3pt
+  # the sweep headline showed (its baseline wandered across concurrent runs). It is
+  # deterministic and zero-downside, so it ships as a low-magnitude un-cap, not a
+  # fitted optimum -- treat the net delta as directional.
+  tp2_pct: "20.0"
   trail_atr_mult: "2.0"
   breakeven_pct: "2.0"
   # v0.9.6 -- breakeven floor UNDER the trail. The trail rides trail_atr_mult*ATR
