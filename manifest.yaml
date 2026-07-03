@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.11"
+version: "0.9.12"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -205,6 +205,14 @@ strategy_config:
   funding_window: 8
   funding_skip_bps: "30"
   funding_penalty_weight: "8.0"
+  # v0.9.12 -- universes the funding skip/penalty applies to. Funding is sourced
+  # from data.crypto.futures.funding_rate, a CRYPTO endpoint with no RWA-equity or
+  # metals coverage, so on those perps it returns a mis-resolved/foreign value that
+  # spuriously trips the 30bps skip (the live MSTR funding_cr flicker). Restricting
+  # the funding logic to crypto -- where the reading is native -- removes the whole
+  # spurious-skip class while keeping full crowding protection on crypto. Fail-open
+  # on an unknown/empty universe (an unlabeled crypto candidate keeps protection).
+  funding_universes: ["crypto"]
   # v0.5.0 — momentum/breakout entry path (OFF by default; flip per instance).
   # When on, a crypto name extended past max_vwap_ext_pct that is riding a strong
   # aligned higher-TF trend at the session extreme is entered at MARKET (not a
