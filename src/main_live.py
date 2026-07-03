@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.8"
+ANALYSIS_VERSION = "0.9.9"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -244,22 +244,38 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     # Bounded call budget (~2 calls x enrich_top_n), graceful-degrades per symbol.
     enrich_n = max(int(cfg.get("enrich_top_n", 8)), 1)
     enriched = []
+    # v0.9.9: trace the fate of the pre-enrichment BOARD LEADER (highest ticker-scored
+    # qualified name). enrich_score OVERWRITES s.score, so the reason the scan leader
+    # doesn't become the trade -- a trend/funding demotion or a hard skip -- was
+    # invisible: SCAN showed the leader, the trade showed a different name, the step
+    # between was dark. This is the answer to the 2026-07-03 08:49 question (ETH 87
+    # led, TAO got the limit). leader_fate is emitted + folded onto the SCAN line.
+    leader_sym = qualified[0].symbol if qualified else None
+    leader_trace = None
     for s in qualified[:enrich_n]:
+        pre = s.score
         features.enrich(s.features, cfg)
         adj, extra, skip, reason = scoring.enrich_score(s, s.features, cfg)
         s.dims = {**s.dims, **extra}
         s.score, s.skip, s.skip_reason = adj, skip, reason
+        if s.symbol == leader_sym:  # capture the leader's pre/post/skip for the fate
+            leader_trace = {"pre": pre, "post": adj, "skip": skip, "reason": reason}
         if not skip:
             enriched.append(s)
     enriched.sort(key=lambda s: s.score, reverse=True)
     if not enriched:
-        return watch(top_symbol, "no_setup_after_enrichment", {"tradable_candidates": 0})
+        # the leader itself was enrichment-skipped -> surface WHY, not a bare reason.
+        return watch(top_symbol, "no_setup_after_enrichment",
+                     {"tradable_candidates": 0,
+                      "leader_fate": _leader_fate(leader_sym, leader_trace, None)})
 
     best = enriched[0]
+    leader_fate = _leader_fate(leader_sym, leader_trace, best.symbol)
     plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side,
                            entry_mode=best.entry_mode)
     if plan is None or not plan.sizing_ok:
-        return watch(best.symbol, "sizing_failed", {"tradable_candidates": len(enriched)})
+        return watch(best.symbol, "sizing_failed",
+                     {"tradable_candidates": len(enriched), "leader_fate": leader_fate})
 
     # Pre-placement staleness skip (v0.1.17): if the limit entry is already more
     # than limit_chase_pct from current price, it is not a fillable pullback -- in
@@ -278,7 +294,7 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         gap = ((plan.entry - cur) / plan.entry) if plan.side == "short" else ((cur - plan.entry) / plan.entry)
         if gap > chase_pct:
             return watch(best.symbol, "entry_too_far_{:.1f}pct".format(gap * 100.0),
-                         {"tradable_candidates": len(enriched)})
+                         {"tradable_candidates": len(enriched), "leader_fate": leader_fate})
 
     metrics = dict(base_metrics)
     metrics.update({
@@ -299,6 +315,9 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "trend_dir": best.features.trend_dir,
         "funding_now": best.features.funding_now,
         "universe": best.universe,
+        # v0.9.9: null when the board leader IS the trade; else why it was passed
+        # over (skip=<reason> / demote:pre->post / outrank:<leader>).
+        "leader_fate": leader_fate,
         "analysis_version": ANALYSIS_VERSION,
         "thesis_source": THESIS_SOURCE,
     })
@@ -353,6 +372,26 @@ def _breaker_token(mgmt: dict) -> str:
     if mgmt.get("loss_breaker_threshold") is not None:
         return "-b?"   # armed (threshold computed) but realized PnL unreadable
     return ""
+
+
+def _leader_fate(leader_sym, trace, placed_sym):
+    """v0.9.9: why the pre-enrichment BOARD LEADER (top ticker-scored qualified name)
+    did not become the trade -- the step that was dark between the SCAN line (shows
+    the leader) and the trade signal (shows a different name). enrich_score overwrites
+    the score, so this is the only way to see it. Returns None when the leader IS the
+    trade (nothing to explain) or is unknown. Otherwise, in priority order:
+      skip=<reason>     hard-skipped in enrichment (funding-crowded, no-data, ...)
+      demote:pre->post  trend/funding penalty dropped its score below the field
+      outrank:<leader>  survived enrichment but a lower name's alignment beat it
+    This is the 2026-07-03 08:49 answer (ETH 87 led, TAO took the limit)."""
+    if not leader_sym or trace is None or placed_sym == leader_sym:
+        return None
+    if trace.get("skip"):
+        return "skip=" + str(trace.get("reason") or "?")[:10]
+    pre, post = trace.get("pre"), trace.get("post")
+    if pre is not None and post is not None and post < pre - 0.5:
+        return "demote:%d->%d" % (round(pre), round(post))
+    return "outrank:" + str(leader_sym).replace("USDT", "")[:5]
 
 
 def _scan_digest(scans: list, min_score: float) -> str:
@@ -545,7 +584,13 @@ def run() -> None:
     # in the operator's feed (which reads symbol strings, not metrics). This is the
     # surface that answers 'why did the bot sit out a moving universe' -- gate
     # direction + best candidate + score + qualified/skipped, per universe.
-    scan_line = str(decision.get("meta", {}).get("scan_digest", "SCAN-none"))[:63]
+    scan_line = str(decision.get("meta", {}).get("scan_digest", "SCAN-none"))
+    # v0.9.9: fold the board-leader's fate onto the SCAN line so a passed-over
+    # leader (the 08:49 ETH->TAO case) names its own reason in the visible feed.
+    fate = decision.get("metrics", {}).get("leader_fate")
+    if fate:
+        scan_line = scan_line + "|" + str(fate)
+    scan_line = scan_line[:63]
     try:
         runtime.emit_signal(
             action="close", symbol=scan_line, confidence=0.111,
@@ -553,6 +598,7 @@ def run() -> None:
                      "regime_by_universe": decision.get("metrics", {}).get("regime_by_universe"),
                      "best_score": decision.get("metrics", {}).get("best_score"),
                      "min_score": decision.get("metrics", {}).get("min_score"),
+                     "leader_fate": fate,
                      "analysis_version": ANALYSIS_VERSION},
             meta={"scan_digest": scan_line},
         )
