@@ -156,6 +156,33 @@ def test_funding_crowding():
             "milder adverse funding: soft penalty 8*(15/30) = 4")
 
 
+def test_funding_scoped_to_crypto():
+    # v0.9.12: funding is sourced from a CRYPTO endpoint (data.crypto.futures.
+    # funding_rate) with no RWA-equity/metals coverage, so its reading is a data
+    # artifact on those perps (the live MSTR funding_cr glitch). The skip+penalty
+    # must apply ONLY where funding is native (crypto); equity/metals are exempt.
+    f = _cand(); f.funding_ok = True; f.funding_now = 0.0040   # +40bps, would skip on crypto
+
+    def _u(universe):
+        s = _scored(80.0, feats=f); s.universe = universe
+        return scoring.enrich_score(s, f, _CFG)
+
+    _, _, skip_c, reason_c = _u("crypto")
+    _assert(skip_c and reason_c == "funding_crowded_long",
+            "crypto keeps the funding skip at full strength (real crowding protection preserved)")
+
+    adj_e, extra_e, skip_e, _ = _u("equities")
+    _assert(not skip_e, "equity perp is NOT funding-skipped (crypto-endpoint artifact ignored)")
+    _assert(abs(adj_e - 80.0) < 1e-9, "equity: no funding penalty either -> full score")
+    _assert("funding_bps" not in extra_e, "equity: funding not even read (block skipped)")
+
+    _, _, skip_m, _ = _u("metals")
+    _assert(not skip_m, "metals perp is NOT funding-skipped")
+
+    _, _, skip_blank, _ = _u("")
+    _assert(skip_blank, "empty/unknown universe FAILS OPEN -> funding still applies (crypto default)")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -260,10 +260,24 @@ def enrich_score(scored: Scored, feats: SymbolFeatures, cfg: dict) -> tuple:
         if not (aligned and near_extreme):
             skip, reason = True, "breakout_unconfirmed"
 
-    # --- funding: skip into a crowded extreme, soft-penalize milder adverse funding
+    # --- funding: skip into a crowded extreme, soft-penalize milder adverse funding.
+    # v0.9.12: funding is sourced from data.crypto.futures.funding_rate -- a CRYPTO
+    # endpoint (Coinglass-backed) with NO RWA-equity/metals coverage. Applied to an
+    # equity perp (MSTRUSDT, whose true funding settles at 0) it returns a foreign /
+    # mis-resolved value that can exceed the 30bps skip, discarding the board's best
+    # equity signal on pure data noise -- the live MSTR `funding_cr` flicker (skip at
+    # >30bps one scan, empty->clean the next). Scope the whole funding block to the
+    # universes where the reading is NATIVE (crypto). Fail-OPEN on an unknown/empty
+    # universe so an unlabeled crypto candidate never loses crowding protection (the
+    # single-universe fallback names it 'crypto'; recon/tests leave it '' with
+    # funding_ok False anyway, so the block short-circuits regardless). Crypto keeps
+    # BOTH the hard skip and the soft penalty at full strength -- a genuine mania at
+    # 30-100bps on ETH/SOL still skips exactly as before.
     funding_penalty = 0.0
     funding_skip = False
-    if feats.funding_ok and feats.funding_now is not None:
+    _uni = getattr(scored, "universe", "") or ""
+    _funding_applies = (not _uni) or _uni in set(cfg.get("funding_universes", ["crypto"]))
+    if _funding_applies and feats.funding_ok and feats.funding_now is not None:
         bps = feats.funding_now * 10000.0  # decimal funding rate -> basis points
         extra["funding_bps"] = round(bps, 3)
         skip_bps = float(cfg.get("funding_skip_bps", "30"))
