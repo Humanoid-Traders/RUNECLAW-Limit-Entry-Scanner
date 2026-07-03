@@ -50,6 +50,7 @@ def _wire_sl(cur_sl, atr=5.0):
         contract_rules=lambda s: types.SimpleNamespace(price_step=None),
     )
     execution.features.fetch_klines = lambda symbol, interval="1h", limit=30: [1] * 30
+    execution.features._closed_bars = lambda bars, interval: bars  # v0.9.13: pass-through the mocked ATR pipeline
     execution.features._wilder_atr = lambda bars, period: atr
     return cap
 
@@ -163,6 +164,25 @@ def test_scaleout_places_pinned_close():
     _assert(abs(float(order["qty"]) - 0.76) < 1e-9, "qty = size * frac = 1.52*0.5")
     _assert(actions and "scale_out" in actions[0], "action surfaced")
     _assert(str(diag.get("so", "")).startswith("trimmed"), "diag records the trim")
+
+
+def test_scaleout_qty_aligned_via_compute_qty():
+    # v0.9.13: half a lot-aligned position size is generally NOT itself lot-aligned,
+    # and Bitget rejects an unaligned contract qty (the armed reduce was silently
+    # rejected on most symbols). The reduce is now aligned by reusing compute_qty;
+    # when it returns an aligned lot, the placed qty is that lot, not the raw 0.76.
+    cap = {"order": None}
+    _wire_so([_OTHER_FILL], cap)
+    trade.helpers = types.SimpleNamespace(
+        compute_qty=lambda **k: types.SimpleNamespace(qty="0.7"))   # aligned lot != raw 0.76
+    actions, diag = [], {}
+    execution._scale_out("TSLAUSDT", "long", 104.0, _ENTRY, _pos_record(),
+                         {"scaleout_frac": "0.5", "scaleout_trigger_pct": "3.5",
+                          "margin_mode": "crossed", "leverage": 10},
+                         actions, {"controls_active": {}}, diag)
+    _assert(cap["order"] is not None and cap["order"]["qty"] == "0.7",
+            "reduce qty is the compute_qty-aligned lot (not the raw 1.52*0.5=0.76)")
+    _assert(actions and actions[0]["qty"] == "0.7", "action records the aligned qty")
 
 
 def test_scaleout_already_trimmed_guard():

@@ -183,6 +183,23 @@ def test_funding_scoped_to_crypto():
     _assert(skip_blank, "empty/unknown universe FAILS OPEN -> funding still applies (crypto default)")
 
 
+def test_no_vwap_hard_skip():
+    # v0.9.13 (audit C-1): VWAP is the entry anchor (risk.build_plan is VWAP-relative
+    # and None-fails without it). A vwap-less name must be HARD-SKIPPED, not scored as
+    # a guessed-neutral 10/20 -- otherwise it can top the board, build_plan None-fails,
+    # and main_live stands the whole cycle down with no fallthrough.
+    novwap = _cand("NOVWAPUSDT", vwap=None)
+    good = _cand("GOODUSDT")
+    rows = {r.symbol: r for r in scoring.score_universe([novwap, good], _btc(), _CFG, "long")}
+    _assert(rows["NOVWAPUSDT"].skip and rows["NOVWAPUSDT"].skip_reason == "no_vwap",
+            "vwap-less name hard-skipped as no_vwap")
+    _assert(rows["NOVWAPUSDT"].score == 0.0, "skipped name scores 0 -> cannot lead the board")
+    _assert(not rows["GOODUSDT"].skip, "a valid vwap name is unaffected")
+    # zero vwap is treated the same as missing
+    _assert(scoring.score_universe([_cand("ZUSDT", vwap=0.0)], _btc(), _CFG, "long")[0].skip,
+            "vwap == 0 also hard-skipped")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

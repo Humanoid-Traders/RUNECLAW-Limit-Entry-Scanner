@@ -861,8 +861,14 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
     # Recompute ATR live; no ATR -> no trail this cycle (fail-safe).
     try:
         period = int(cfg.get("atr_period", 14))
-        bars = features.fetch_klines(symbol, interval=str(cfg.get("kline_interval", "1h")),
-                                     limit=max(period + 5, 30))
+        k_int = str(cfg.get("kline_interval", "1h"))
+        bars = features.fetch_klines(symbol, interval=k_int, limit=max(period + 5, 30))
+        # v0.9.13: drop the still-forming candle before ATR, exactly as features.enrich
+        # does for the entry-time ATR. On a 15-min cycle with a 1h interval, 3 of every
+        # 4 cycles the last bar is partial (its TR incomplete/smaller), which biased the
+        # recomputed trail ATR tighter than the closed-candle ATR that set the initial
+        # stop -- so the trail could ratchet on a fictitiously small volatility band.
+        bars = features._closed_bars(bars, k_int) if bars else bars
         atr = features._wilder_atr(bars, period) if bars else None
     except Exception as exc:
         return _why("atr_err:" + _exc_brief(exc)[:20])
@@ -1017,10 +1023,36 @@ def _scale_out(symbol: str, hold_side: str, current: float, entry: float, record
             diag["so"] = "no_qty"
         return
     part = qty * frac
+    # v0.9.13: half of a lot-aligned position size is generally NOT itself lot-aligned,
+    # and Bitget rejects an unaligned contract qty -- so the armed reduce was being
+    # exchange-rejected on most symbols (the scale-out never actually trimmed). Align
+    # `part` to the instrument's size step by reusing compute_qty (the SAME helper the
+    # entry path trusts): converting the reduce's margin back to a qty quantizes it to
+    # a valid lot. Fail-open to the raw part if compute_qty is unreadable (no worse
+    # than before -- an unaligned reject is already surfaced in diag).
+    lev = max(int(cfg.get("leverage", 10) or 10), 1)
+    part_qty = str(part)
+    try:
+        _budget = part * float(current) / lev
+        _qp = trade.helpers.compute_qty(symbol=symbol, market="contract",
+                                        budget_amount=str(_budget), leverage=lev,
+                                        price=str(current))
+        _aligned = getattr(_qp, "qty", None)
+        if _aligned not in (None, "", 0, "0"):
+            part_qty = str(_aligned)
+    except Exception:
+        pass
+    try:
+        if float(part_qty) <= 0:                 # rounded below the min lot -> skip
+            if diag is not None:
+                diag["so"] = "qty_rounds_zero"
+            return
+    except (TypeError, ValueError):
+        pass
     try:
         result = trade.contract.place_order(
             symbol=symbol, side=("sell" if is_long else "buy"), order_type="market",
-            qty=str(part), price="", margin_mode=str(cfg.get("margin_mode", "crossed")).lower(),
+            qty=part_qty, price="", margin_mode=str(cfg.get("margin_mode", "crossed")).lower(),
             pos_side=("long" if is_long else "short"), trade_side="close",
         )
         placed = bool(trade.is_success(result))
@@ -1029,10 +1061,10 @@ def _scale_out(symbol: str, hold_side: str, current: float, entry: float, record
             diag["so"] = ("err:" + _exc_brief(exc))[:30]
         return
     if placed:
-        actions.append({"scale_out": symbol, "qty": str(part), "at": round(current, 6)})
+        actions.append({"scale_out": symbol, "qty": part_qty, "at": round(current, 6)})
         status["controls_active"]["scale_out"] = True
         if diag is not None:
-            diag["so"] = "trimmed:%s" % str(part)[:12]
+            diag["so"] = "trimmed:%s" % part_qty[:12]
     else:
         if diag is not None:
             diag["so"] = ("reject:" + _result_reason(result))[:30]

@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.12"
+ANALYSIS_VERSION = "0.9.13"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -117,7 +117,17 @@ def _scan_universe(uni: dict, cfg: dict, blackout: dict = None) -> dict:
         over.update(extra_over)
     ucfg = {**cfg, **over} if over else cfg
     leader_feats = features.fetch_symbol(leader_sym)
-    taker = features.taker_buy_ratio(leader_sym)
+    # v0.9.13: taker_buy_ratio sources data.crypto.futures.taker_volume -- a CRYPTO
+    # endpoint, SAME class as the funding bug. On the equities (QQQ) and metals (XAU)
+    # leaders it returns a mis-resolved crypto-flow value that feeds scoring.regime's
+    # taker gate and can FLIP the universe's side and size_factor (both drive
+    # risk.build_plan). Read it only for crypto leaders; a non-crypto universe passes
+    # taker=None and regime() degrades cleanly to the up/vwap 2-signal gate. Fail-OPEN
+    # on an unknown/empty universe (legacy single-universe fallback names it 'crypto').
+    _tk_unis = set(cfg.get("taker_universes", ["crypto"]))
+    _uni_name = str(uni.get("name", "") or "")
+    taker = (features.taker_buy_ratio(leader_sym)
+             if (not _uni_name or _uni_name in _tk_unis) else None)
     reg = scoring.regime(leader_feats, taker, ucfg)
     direction = reg.direction
     scan_direction = direction if direction in ("long", "short") else "long"
