@@ -489,6 +489,8 @@ def main():
     ap.add_argument("--preempt", default="0",
                     help="signal-strength preemption: a fresh candidate beating the weakest "
                          "resting limit by >= this many score points cancel-replaces it (0=off)")
+    ap.add_argument("--set", default="",
+                    help="generic cfg overrides 'key=val,key=val' (e.g. min_score=75,atr_limit_mult=0.4)")
     ap.add_argument("--ab-preempt", action="store_true",
                     help="A/B first-come-first-served vs a sweep of preemption deltas")
     ap.add_argument("--ab-exitpack", action="store_true",
@@ -540,6 +542,13 @@ def main():
         "steplock": a.steplock, "tstop_guard": a.tstop_guard,
         "preempt_delta": a.preempt,
     }
+    # v0.9.13: generic cfg override so ANY knob is sweepable without a dedicated flag
+    # (min_score, atr_limit_mult, tp2_pct, trend_weight, enrich_top_n, ...).
+    # --set key=val,key=val ; values stay strings (the engine coerces them like the manifest).
+    for kv in str(getattr(a, "set", "") or "").split(","):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            cfg[k.strip()] = v.strip()
     fetch_syms = list(dict.fromkeys(list(a.symbols) + [a.leader]))  # leader must be fetched too
     data = R.fetch_all(fetch_syms, a.days)
     base = f"leader={a.leader} breakout={'ON' if a.breakout else 'off'} exit={a.exit_mode} " \
