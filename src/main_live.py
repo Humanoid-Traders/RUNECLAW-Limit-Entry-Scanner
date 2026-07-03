@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.10"
+ANALYSIS_VERSION = "0.9.11"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -259,7 +259,8 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         s.dims = {**s.dims, **extra}
         s.score, s.skip, s.skip_reason = adj, skip, reason
         if s.symbol == leader_sym:  # capture the leader's pre/post/skip for the fate
-            leader_trace = {"pre": pre, "post": adj, "skip": skip, "reason": reason}
+            leader_trace = {"pre": pre, "post": adj, "skip": skip, "reason": reason,
+                            "bps": extra.get("funding_bps")}  # v0.9.11: prove glitch vs real
         if not skip:
             enriched.append(s)
     enriched.sort(key=lambda s: s.score, reverse=True)
@@ -387,7 +388,16 @@ def _leader_fate(leader_sym, trace, placed_sym):
     if not leader_sym or trace is None or placed_sym == leader_sym:
         return None
     if trace.get("skip"):
-        return "skip=" + str(trace.get("reason") or "?")[:10]
+        reason = str(trace.get("reason") or "?")
+        # v0.9.11: a funding-crowded skip carries the ACTUAL funding bps, because
+        # the skip only fires above ~30 bps while real funding on these perps runs
+        # <=~3 bps -- so a fired skip is almost certainly a data glitch (e.g. the
+        # crypto funding feed returning anomalous values for RWA equity perps whose
+        # true funding is 0). The number proves glitch (fcr+47) vs real (>30).
+        bps = trace.get("bps")
+        if reason.startswith("funding") and bps is not None:
+            return "skip=fcr%+d" % round(bps)
+        return "skip=" + reason[:10]
     pre, post = trace.get("pre"), trace.get("post")
     if pre is not None and post is not None and post < pre - 0.5:
         return "demote:%d->%d" % (round(pre), round(post))

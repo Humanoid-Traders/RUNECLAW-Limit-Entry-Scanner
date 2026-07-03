@@ -106,9 +106,23 @@ def test_leader_fate_none_when_leader_is_the_trade():
 
 
 def test_leader_fate_hard_skip():
+    # non-funding skip (no bps) keeps the generic reason form
     fate = ml._leader_fate("ETHUSDT", {"pre": 87, "post": 87, "skip": True,
-                                       "reason": "funding_crowded"}, placed_sym="TAOUSDT")
-    _assert(fate == "skip=funding_cr", "enrichment hard-skip named (reason, truncated)")
+                                       "reason": "breakout_unconfirmed"}, placed_sym="TAOUSDT")
+    _assert(fate == "skip=breakout_u", "generic hard-skip named (reason, truncated)")
+
+
+def test_leader_fate_funding_skip_carries_bps():
+    # v0.9.11: a funding skip carries the ACTUAL bps -- the number that proves a
+    # glitch (fcr+47, when real funding is <3bps) vs a genuine >30bps crowd.
+    fate = ml._leader_fate("MSTRUSDT", {"pre": 100, "post": 100, "skip": True,
+                                        "reason": "funding_crowded_long", "bps": 47.3},
+                           placed_sym="XAGUSDT")
+    _assert(fate == "skip=fcr+47", "funding skip shows signed bps (glitch-confirming)")
+    short = ml._leader_fate("MSTRUSDT", {"pre": 100, "post": 100, "skip": True,
+                                         "reason": "funding_crowded_short", "bps": -52.0},
+                            placed_sym="XAGUSDT")
+    _assert(short == "skip=fcr-52", "crowded-short funding skip shows negative bps")
 
 
 def test_leader_fate_demote():
