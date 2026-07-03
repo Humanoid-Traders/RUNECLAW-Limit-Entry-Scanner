@@ -145,6 +145,107 @@ def test_leader_fate_folds_onto_scan_line_budget():
     _assert(len(line) <= 63, "SCAN line + fate stays within the signal-symbol budget")
 
 
+# ---- _blind_token (v0.9.14: a blind read must not look like a flat idle cycle) ----
+
+def test_blind_token_clean_read():
+    _assert(ml._blind_token({"state_blind": False}) == "",
+            "book read cleanly -> no bl. token (nothing misleading)")
+
+
+def test_blind_token_priority():
+    # management crash wins over every downstream reason
+    _assert(ml._blind_token({"state_blind": True, "mgmt_error": "KeyError",
+                             "position_query_error": "TimeoutError"}) == "bl.crash:KeyError",
+            "a management crash surfaces first (bl.crash:<Exc>)")
+    _assert(ml._blind_token({"state_blind": True, "position_query_error": "TimeoutError"})
+            == "bl.posq:TimeoutErr", "position query raised -> bl.posq")
+    _assert(ml._blind_token({"state_blind": True, "pending_error": "ConnErr"})
+            == "bl.pendq:ConnErr", "pending query raised -> bl.pendq")
+    _assert(ml._blind_token({"state_blind": True, "blind_reason": "pos_margin_1.2_vs_empty"})
+            == "bl.margin", "positions empty but margin locked -> bl.margin (the read-lie)")
+    _assert(ml._blind_token({"state_blind": True}) == "bl.?",
+            "blind with no attributable reason -> bl.? (never silent)")
+
+
+# ---- _circuit_state_token (v0.9.14: flag an equity circuit on a dead .state/) ----
+
+def test_circuit_state_token_dead_state():
+    dead = {"controls_active": {"circuit_breaker": True}, "state_runs": 1}
+    _assert(ml._circuit_state_token(dead) == "-cx",
+            "circuit claims active but state_runs stuck at 1 -> -cx (day_start never carries)")
+
+
+def test_circuit_state_token_persisting_state():
+    live = {"controls_active": {"circuit_breaker": True}, "state_runs": 42}
+    _assert(ml._circuit_state_token(live) == "",
+            "state_runs climbing -> .state/ persists -> no warning (circuit is valid)")
+    off = {"controls_active": {"circuit_breaker": False}, "state_runs": 1}
+    _assert(ml._circuit_state_token(off) == "",
+            "circuit not active (no equity read) -> no -cx even on ephemeral state")
+    _assert(ml._circuit_state_token({}) == "", "no fields -> empty")
+
+
+# ---- _watch_short (v0.9.14: the six stand-downs stop collapsing to 'none') ----
+
+def test_watch_short_maps_known_reasons():
+    _assert(ml._watch_short("all_regimes_neutral") == "neutral", "neutral regime compacted")
+    _assert(ml._watch_short("no_setup_at_or_above_min_score") == "lowscore", "below-floor compacted")
+    _assert(ml._watch_short("no_setup_after_enrichment") == "enrich0", "enrichment-empty compacted")
+    _assert(ml._watch_short("sizing_failed") == "sizefail", "sizing failure compacted")
+    _assert(ml._watch_short("circuit_paused") == "cbpause", "circuit pause compacted")
+
+
+def test_watch_short_dynamic_reason_passthrough():
+    _assert(ml._watch_short("entry_too_far_3pct") == "far:3pct",
+            "dynamic entry-too-far keeps its number (far:Npct)")
+    _assert(len(ml._watch_short("some_unknown_very_long_reason_string_here")) <= 16,
+            "an unknown reason is truncated to the tail budget")
+
+
+# ---- _held_token (v0.9.14: the quiet steady-state position becomes visible) ----
+
+def _diag(sym, move, age, ts_ok=True, be_armed=False, be_lock=None, so=None, trail=None):
+    d = {"sym": sym, "move_pct": move, "age_h": age, "ts_ok": ts_ok, "be_armed": be_armed}
+    if be_lock is not None:
+        d["be_lock"] = be_lock
+    if so is not None:
+        d["so"] = so
+    if trail is not None:
+        d["trail"] = trail
+    return d
+
+
+def test_held_token_none_when_nothing_managed():
+    _assert(ml._held_token({}, {}) == "", "no position_diag -> empty")
+    _assert(ml._held_token({"position_diag": [{"sym": "X", "note": "unmanaged_symbol"}]}, {}) == "",
+            "an unmanaged diag (no move_pct) is not a held position -> empty")
+
+
+def test_held_token_surfaces_move_flags_and_age():
+    # MSTR up 4%, breakeven armed + lock floored + trail set, 9h into a 12h ceiling.
+    diag = _diag("MSTRUSDT", 4.3, 9.2, be_armed=True, be_lock=100.7, trail="set:100.7000")
+    tok = ml._held_token({"position_diag": [diag]}, {"time_stop_hours": "12"})
+    _assert(tok == "hld.MSTR+4alr.t9/12",
+            "hld names sym, +move, flags(a=armed,l=lock,r=trail), age/cap -> " + tok)
+
+
+def test_held_token_picks_oldest_and_blind_timestop():
+    young = _diag("NVDAUSDT", 1.0, 2.0)
+    # old is the oldest by age_h but ts_ok False -> its open-time is unreadable, so
+    # the time-stop is blind on it (the more urgent thing to show): .t?/cap.
+    old = _diag("TSLAUSDT", -2.0, 8.0, ts_ok=False)
+    tok = ml._held_token({"position_diag": [young, old]}, {"time_stop_hours": "12"})
+    _assert(tok == "hld.TSLA-2.t?/12",
+            "oldest held wins; ts_ok False -> .t?/cap (time-stop is blind on it) -> " + tok)
+
+
+def test_held_token_within_budget():
+    diag = _diag("VERYLONGNAMEUSDT", 123, 240, be_armed=True, be_lock=1.0,
+                 so="trimmed:5", trail="set:1.0")
+    _assert(len(ml._held_token({"position_diag": [diag]}, {})) <= 32,
+            "hld token capped so the compact line never overflows")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
