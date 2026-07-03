@@ -96,6 +96,41 @@ def test_scan_digest_truncates():
     _assert(len(ml._scan_digest(scans, 70)) <= 63, "digest capped at the 63-char signal-symbol budget")
 
 
+# ---- _leader_fate (why the board leader wasn't the trade) ----
+
+def test_leader_fate_none_when_leader_is_the_trade():
+    _assert(ml._leader_fate("ETHUSDT", {"pre": 87, "post": 84, "skip": False},
+                            placed_sym="ETHUSDT") is None,
+            "leader IS the placed trade -> None (nothing to explain)")
+    _assert(ml._leader_fate(None, None, None) is None, "no leader -> None")
+
+
+def test_leader_fate_hard_skip():
+    fate = ml._leader_fate("ETHUSDT", {"pre": 87, "post": 87, "skip": True,
+                                       "reason": "funding_crowded"}, placed_sym="TAOUSDT")
+    _assert(fate == "skip=funding_cr", "enrichment hard-skip named (reason, truncated)")
+
+
+def test_leader_fate_demote():
+    # the 08:49 shape: ETH led at 87 ticker, trend/funding penalty dropped it to 69,
+    # TAO took the limit. The fate string states exactly that.
+    fate = ml._leader_fate("ETHUSDT", {"pre": 87, "post": 69, "skip": False}, placed_sym="TAOUSDT")
+    _assert(fate == "demote:87->69", "trend/funding demotion shown pre->post")
+
+
+def test_leader_fate_outrank():
+    # leader survived enrichment (no skip, no material demote) but a lower name's
+    # alignment lifted it past the leader.
+    fate = ml._leader_fate("ETHUSDT", {"pre": 87, "post": 87, "skip": False}, placed_sym="SOLUSDT")
+    _assert(fate == "outrank:ETH", "survived (no material demote) but outranked -> names the leader")
+
+
+def test_leader_fate_folds_onto_scan_line_budget():
+    # the fate is appended to the SCAN line; the whole thing stays within 63 chars.
+    line = ("SCAN-cry:LETH87q-met:LXAG64x-equ:sTSLA70q" + "|" + "demote:87->69")[:63]
+    _assert(len(line) <= 63, "SCAN line + fate stays within the signal-symbol budget")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
