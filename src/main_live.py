@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.13"
+ANALYSIS_VERSION = "0.9.14"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -385,6 +385,110 @@ def _breaker_token(mgmt: dict) -> str:
     return ""
 
 
+def _blind_token(mgmt: dict) -> str:
+    """v0.9.14 (observability-audit HIGH): state_blind means management could not
+    read the book this cycle -- open_if_allowed refuses new entries AND open_count
+    / actions are unreliable. It had NO compact token, so a blind cycle looked
+    identical to a flat idle one (own0-act0-none). Name WHY the read failed, in
+    priority order (management crash > position query raised > pending query raised
+    > margin-locked-but-read-empty > non-raising reject envelopes). Returns "" when
+    the book read cleanly."""
+    if not mgmt.get("state_blind"):
+        return ""
+    if mgmt.get("mgmt_error"):
+        return "bl.crash:" + str(mgmt["mgmt_error"])[:10]
+    if mgmt.get("position_query_error"):
+        return "bl.posq:" + str(mgmt["position_query_error"])[:10]
+    if mgmt.get("pending_error"):
+        return "bl.pendq:" + str(mgmt["pending_error"])[:10]
+    if mgmt.get("blind_reason"):
+        return "bl.margin"   # positions read empty but margin still locked (read-lie)
+    if mgmt.get("position_query_reason"):
+        return ("bl.posrej:" + str(mgmt["position_query_reason"]).replace(" ", "_"))[:22]
+    if mgmt.get("pending_reason"):
+        return ("bl.pendrej:" + str(mgmt["pending_reason"]).replace(" ", "_"))[:22]
+    return "bl.?"
+
+
+def _circuit_state_token(mgmt: dict) -> str:
+    """v0.9.14 (observability-audit HIGH): the equity circuit breaker
+    (circuit_pause_usdt/circuit_stop_usdt) needs day_start_equity to round-trip
+    through .state/ across cycles. controls_active.circuit_breaker reports True
+    whenever equity is merely READABLE this cycle -- so it claimed 'active' even
+    when .state/ is ephemeral and day_start_equity is reset to current equity every
+    run (today_pnl == 0 forever, the breaker can never trip). state_runs is the
+    persistence probe: stuck at <=1 => .state/ does not carry => the equity circuit
+    is non-functional. Emit -cx ONLY in that broken case (self-clears the moment
+    runs climb); the fills-based loss_breaker (-b) is the real protection."""
+    runs = mgmt.get("state_runs")
+    if mgmt.get("controls_active", {}).get("circuit_breaker") and runs is not None and runs <= 1:
+        return "-cx"
+    return ""
+
+
+_WATCH_SHORT = {
+    "all_regimes_neutral": "neutral",
+    "no_setup_at_or_above_min_score": "lowscore",
+    "no_setup_after_enrichment": "enrich0",
+    "sizing_failed": "sizefail",
+    "circuit_paused": "cbpause",
+    "circuit_tripped": "cbtrip",
+}
+
+
+def _watch_short(reason: str) -> str:
+    """v0.9.14 (observability-audit HIGH): the six build_decision stand-downs all
+    collapsed to tail 'none', because full_reason is sourced only from
+    open_if_allowed (which never runs on a watch action). Map the known verbose
+    reasons to compact codes so the visible line finally answers 'why did the cycle
+    place nothing'; dynamic reasons (entry_too_far_Npct) pass through truncated."""
+    r = str(reason or "")
+    if r in _WATCH_SHORT:
+        return _WATCH_SHORT[r]
+    if r.startswith("entry_too_far"):
+        return r.replace("entry_too_far_", "far:")[:16]
+    return r.replace(" ", "_")[:16]
+
+
+def _held_token(mgmt: dict, cfg: dict) -> str:
+    """v0.9.14 (observability-audit HIGH): when a position is held but no management
+    action fires this cycle (the steady state), the compact line showed only
+    own1-act0 -- the position's live state (how far in profit, whether breakeven /
+    lock / scale-out is armed, how close to the time-stop) lived only in
+    position_diag, which the SITREP never reads. Surface the OLDEST managed position
+    (closest to the time-stop):
+        hld.<sym><+move%><flags>.t<age>/<max>
+      flags: a=breakeven armed  l=lock floored the stop  s=scaled/arming  r=trail set
+      .t<age>/<max> = hours held / time_stop_hours ceiling (.t?/<max> if open-time
+      unreadable -> the time-stop is blind on that position). Returns "" when nothing
+      managed is held."""
+    diags = mgmt.get("position_diag") or []
+    managed = [d for d in diags if isinstance(d, dict) and d.get("move_pct") is not None]
+    if not managed:
+        return ""
+    d = max(managed, key=lambda x: (x.get("age_h") is not None, x.get("age_h") or 0.0))
+    sym = str(d.get("sym", "?")).replace("USDT", "")[:4]
+    flags = ""
+    if d.get("be_armed"):
+        flags += "a"
+    if d.get("be_lock") is not None:
+        flags += "l"
+    if str(d.get("so", "")).startswith("trimmed") or d.get("so") == "armed":
+        flags += "s"
+    if str(d.get("trail", "")).startswith("set:"):
+        flags += "r"
+    try:
+        cap = int(round(float(cfg.get("time_stop_hours", "12") or "12")))
+    except (TypeError, ValueError):
+        cap = 12
+    tok = "hld.%s%+d%s" % (sym, int(round(d["move_pct"])), flags)
+    if d.get("ts_ok") and d.get("age_h") is not None:
+        tok += ".t%d/%d" % (int(d["age_h"]), cap)
+    else:
+        tok += ".t?/%d" % cap
+    return tok[:32]
+
+
 def _leader_fate(leader_sym, trace, placed_sym):
     """v0.9.9: why the pre-enrichment BOARD LEADER (top ticker-scored qualified name)
     did not become the trade -- the step that was dark between the SCAN line (shows
@@ -545,13 +649,27 @@ def run() -> None:
     # (no parseable open-time, or the cancel API rejected). This is the silent
     # failure that left a limit resting 5h+ on Classic with act0 and no cancel.
     xpd = str(mgmt.get("expiry_diag", ""))[:26]
-    # Tail priority (v0.3.1). Three cases, in order:
-    #   1. act.<type>      -- a management action fired this cycle (stale_limit_cancel,
-    #      limit_expiry_cancel, circuit_cancel, time_stop_close, auto_be, ...)
-    #   2. perr.<code:msg> -- the pending fetch genuinely FAILED (actionable error)
-    #   3. <reason>        -- why nothing was placed / what was decided, untruncated
+    # Tail priority (v0.3.1, extended v0.9.14 by the observability-audit). First
+    # match wins; each names WHAT the cycle actually did, most-urgent first:
+    #   1. bl.<why>        -- state_blind: the book could not be read, so own/act are
+    #      unreliable and no new entry is allowed (dominates -- flying blind).
+    #   2. act.<type>      -- a management action fired (stale_limit_cancel,
+    #      limit_expiry_cancel, circuit_cancel, time_stop_close, auto_be, ...).
+    #   3. xpd.<diag>      -- a stuck owned-pending order the bot cannot time-expire.
+    #   4. hld.<sym...>    -- a position is held and quiet: its live state (move /
+    #      breakeven / lock / scale / trail / time-stop age) -- the steady state.
+    #   5. no.<reason>     -- a watch stand-down: WHY the cycle placed nothing (was
+    #      invisible as 'none', since full_reason only fills on an actionable open).
+    #   6. perr.<code:msg> -- the pending fetch genuinely FAILED (actionable error).
+    #   7. <reason>        -- fallback: the raw open-path reason / decided outcome.
     # The full envelope shape is preserved in metrics (pending_shape) for deep debug.
-    if acts and act_label:
+    blind = _blind_token(mgmt) if follow else ""
+    held = _held_token(mgmt, cfg)
+    watch_reason = (str(decision.get("meta", {}).get("reason", ""))
+                    if decision.get("action") == "watch" else "")
+    if blind:
+        tail = blind
+    elif acts and act_label:
         tail = "act." + act_label[:28]
     elif xpd:
         # Surface the stuck-expiry diagnostic over the scan reason: an order the bot
@@ -559,16 +677,23 @@ def run() -> None:
         # perr are mutually exclusive in practice -- xpd needs an owned pending to
         # exist, perr fires only when pT==0.) Full scan reason stays in metrics.
         tail = "xpd." + xpd
+    elif held:
+        tail = held
+    elif watch_reason:
+        tail = "no." + _watch_short(watch_reason)
     elif str(pT) == "0" and preason:
         tail = "perr." + preason
     else:
         tail = rshort
     # v0.9.8: the breaker token rides between the trade block and the tail so the
     # headroom is visible in the compact line (the only surface the SITREP reads).
+    # v0.9.14: -cx follows it iff the equity circuit claims active on a .state/ that
+    # does not persist (its day_start_equity never round-trips -> it can never trip).
     bkr = _breaker_token(mgmt)
-    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}{bk}-{t}"
+    cbx = _circuit_state_token(mgmt)
+    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}{bk}{cx}-{t}"
            .format(f=int(follow), em=emc, own=own, pt=pT, op=oP, a=acts,
-                   c=int(called), p=pcode, bk=bkr, t=tail))[:63]
+                   c=int(called), p=pcode, bk=bkr, cx=cbx, t=tail))[:63]
     runtime.emit_signal(
         action="close", symbol=dbg, confidence=0.222,
         metrics={"dbg": dbg, "follow": follow, "exec_mode": exec_mode,
@@ -580,6 +705,11 @@ def run() -> None:
                  "pending_max_age_h": mgmt.get("pending_max_age_h"),
                  "position_diag": mgmt.get("position_diag", []),
                  "state_runs": mgmt.get("state_runs"),
+                 # v0.9.14 observability: surface the blind read + its reason so the
+                 # -cx / bl. tokens on the compact line are reconstructable in metrics.
+                 "state_blind": mgmt.get("state_blind", False),
+                 "blind_reason": mgmt.get("blind_reason") or mgmt.get("position_query_reason")
+                 or mgmt.get("pending_reason"),
                  # v0.9.0 observability: emit each control's running state every cycle
                  # (not only when it fires) so an INERT control is visible -- the trail
                  # was dead a whole session because nothing surfaced its status.

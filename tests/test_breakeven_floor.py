@@ -122,6 +122,36 @@ def test_short_side_mirrors():
             "short stop floored at entry * (1 - lock) = 97.74")
 
 
+def test_lock_win_is_reported_as_steplock():
+    # v0.9.14 (observability-audit): when the breakeven/step lock (100.72) -- not the
+    # raw 2*ATR trail (96.56) -- sets the stop, the action must read `steplock`, so the
+    # compact line shows act.steplock (banked a lock) vs act.trail_stop (rode the ATR
+    # band down). Same geometry as test_armed_lock_lifts_stop_above_entry.
+    cfg = dict(_CFG); cfg["breakeven_lock_pct"] = "1.5"
+    _wire(cur_sl=98.63, atr=2.47)
+    actions, diag = [], {}
+    moved = execution._trail_stop("MSTRUSDT", "long", 101.5, cfg, actions,
+                                  {"controls_active": {}}, diag, entry=_ENTRY, be_armed=True)
+    _assert(moved is True, "the lock lifts the stop")
+    _assert(bool(actions) and "steplock" in actions[0],
+            "lock-won stop is reported as a steplock action, not a raw trail_stop")
+    _assert(diag.get("acted") == "steplock", "diag['acted'] mirrors the steplock attribution")
+
+
+def test_raw_trail_still_reports_trail_stop():
+    # when the ATR trail itself sets the stop (no lock, or a lock below the trail), the
+    # action stays `trail_stop` -- the attribution only flips when the floor wins. Here
+    # price ran to 110: raw trail 110-4.94=105.06 > live SL 100, and lock/steplock off.
+    cfg = dict(_CFG); cfg["breakeven_lock_pct"] = "0"; cfg["steplock"] = ""
+    _wire(cur_sl=100.0, atr=2.47)
+    actions, diag = [], {}
+    moved = execution._trail_stop("MSTRUSDT", "long", 110.0, cfg, actions,
+                                  {"controls_active": {}}, diag, entry=_ENTRY, be_armed=True)
+    _assert(moved is True and bool(actions) and "trail_stop" in actions[0],
+            "a pure ATR trail (no winning lock) stays labeled trail_stop")
+    _assert(diag.get("acted") == "trail_stop", "diag['acted'] == trail_stop for the raw trail")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

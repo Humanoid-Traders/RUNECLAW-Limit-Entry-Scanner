@@ -808,9 +808,10 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
             # (no_atr / no_sl_order / no_sl_trigger / hold:<trail>v<cur> / tick /
             # modify_err:<msg> / set:<price>) so a silently-inert trail is visible
             # the way xpd surfaced the silent limit-expiry. See DESIGN_v0.6.4.md.
-            if _trail_stop(symbol, hold_side, current, cfg, actions, status, diag,
-                           entry=entry, be_armed=be_armed):
-                diag["acted"] = "trail_stop"
+            # v0.9.14: _trail_stop sets diag["acted"] itself (trail_stop vs steplock)
+            # so the lock-won case is not mislabeled a raw trail.
+            _trail_stop(symbol, hold_side, current, cfg, actions, status, diag,
+                        entry=entry, be_armed=be_armed)
         elif be_armed:
             _move_stop_to_breakeven(symbol, entry, actions, status)
             diag["acted"] = "auto_be"
@@ -900,6 +901,7 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
     # exchange SL is the memory -- a reversal keeps the highest floor reached
     # because the trail never loosens). Validated in replay --ab-exitpack: the
     # ladder beat the single lock in both breakout-ON windows (the live config).
+    floor_won = False  # v0.9.14: did the breakeven/step lock (not the raw ATR) set the stop?
     if entry and entry > 0:
         move_pct = (current - entry) / entry if is_long else (entry - current) / entry
         floor = None
@@ -924,7 +926,9 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
             lock_px = entry * (1.0 + floor) if is_long else entry * (1.0 - floor)
             inside = (lock_px < current) if is_long else (lock_px > current)
             if inside:
+                lifted = (lock_px > trail) if is_long else (lock_px < trail)
                 trail = max(trail, lock_px) if is_long else min(trail, lock_px)
+                floor_won = lifted  # the lock, not the raw ATR trail, is now the stop
                 if diag is not None:
                     diag["be_lock"] = round(lock_px, 6)
     # Read the live SL plan order + its trigger. Unreadable -> NEVER blind-set.
@@ -958,10 +962,17 @@ def _trail_stop(symbol: str, hold_side: str, current: float, cfg: dict,
         step = getattr(trade.helpers.contract_rules(symbol), "price_step", None)
         trade.contract.modify_stop_loss(symbol=symbol, order_id=order_id,
                                         trigger_price=_align(trail, step))
-        actions.append({"trail_stop": symbol, "to": round(trail, 6)})
+        # v0.9.14 (observability-audit MEDIUM): when the breakeven/step lock set the
+        # stop (not the raw ATR trail), report it as a `steplock` action so the
+        # compact line reads act.steplock -- the trail vs. lock attribution the
+        # operator kept guessing at. controls_active["trail"] stays set either way
+        # (the trail machinery ran); only the action label distinguishes the cause.
+        act_key = "steplock" if floor_won else "trail_stop"
+        actions.append({act_key: symbol, "to": round(trail, 6)})
         status["controls_active"]["trail"] = True
         if diag is not None:
             diag["trail"] = "set:%.4f" % trail
+            diag["acted"] = act_key
         return True
     except Exception as exc:
         return _why("modify_err:" + _exc_brief(exc)[:24])
