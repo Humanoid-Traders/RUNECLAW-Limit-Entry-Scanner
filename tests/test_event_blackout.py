@@ -157,6 +157,27 @@ def test_scan_universe_blackout_wiring():
         ml.features.fetch_symbol, ml.features.taker_buy_ratio = orig_fetch, orig_taker
 
 
+def test_taker_scoped_to_crypto():
+    # v0.9.13: taker_buy_ratio sources data.crypto.futures.taker_volume (a CRYPTO
+    # endpoint, same class as funding). It must be read ONLY for crypto leaders --
+    # on QQQ/XAU it returns a mis-resolved value that can flip the regime side/size.
+    called = []
+    def _fetch(symbol, exchange="bitget"):
+        return SF(symbol, True, last=101.0, vwap=100.0, high=102.0, low=99.0,
+                  change_pct=1.0, quote_volume=1e9)
+    orig_fetch, orig_taker = ml.features.fetch_symbol, ml.features.taker_buy_ratio
+    ml.features.fetch_symbol = _fetch
+    ml.features.taker_buy_ratio = lambda s, exchange="bitget": (called.append(s), 1.5)[1]
+    try:
+        unis = {u["name"]: u for u in ml._universes(_UNI_CFG)}
+        for name in ("crypto", "equities", "metals"):
+            ml._scan_universe(unis[name], _UNI_CFG)
+        _assert(called == ["BTCUSDT"],
+                "taker read ONLY for the crypto leader (BTC), never QQQ/XAU")
+    finally:
+        ml.features.fetch_symbol, ml.features.taker_buy_ratio = orig_fetch, orig_taker
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

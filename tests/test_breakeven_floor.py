@@ -42,6 +42,7 @@ def _wire(cur_sl, atr=2.47):
     )
     # ATR is recomputed live off klines; pin both so the trail geometry is exact.
     execution.features.fetch_klines = lambda symbol, interval="1h", limit=30: [1] * 30
+    execution.features._closed_bars = lambda bars, interval: bars  # v0.9.13: pass-through the mocked ATR pipeline
     execution.features._wilder_atr = lambda bars, period: atr
     return cap
 

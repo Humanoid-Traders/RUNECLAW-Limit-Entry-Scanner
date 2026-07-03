@@ -104,6 +104,17 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
         if not f.ok:
             results.append(Scored(f.symbol, side, 0.0, {"total": 0.0}, True, f.note or "no_data", f))
             continue
+        # v0.9.13 (audit C-1): VWAP is the entry anchor -- risk.build_plan is
+        # VWAP-relative (entry = vwap -/+ k*ATR) and returns None without it. A
+        # name with no VWAP is structurally untradeable, so HARD-SKIP it instead of
+        # scoring the VWAP dim as a guessed-neutral 10/20. Otherwise a vwap-less name
+        # can top the board, then build_plan None-fails and main_live stands the
+        # WHOLE cycle down (watch sizing_failed) with no fallthrough to the runner-up.
+        # Mirrors the no_data / thin_volume disqualifiers ("missing data is never
+        # guessed, and must not be traded either").
+        if not f.vwap or f.vwap <= 0:
+            results.append(Scored(f.symbol, side, 0.0, {"total": 0.0}, True, "no_vwap", f))
+            continue
 
         dims: dict = {}
         skip = False
