@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.7"
+ANALYSIS_VERSION = "0.9.8"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -206,6 +206,9 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     }
     base_meta = {
         "regime_by_universe": regime_by_uni,
+        # v0.9.8: compact per-universe digest, carried on every path so the
+        # emitted SCAN line surfaces per-name scores in the operator's feed.
+        "scan_digest": _scan_digest(scans, min_score),
         "gate_summary": " || ".join("{}: {}".format(sc["name"], _gate_summary(sc["regime"]))
                                     for sc in scans),
         "board": board,
@@ -333,6 +336,60 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     }
 
 
+def _breaker_token(mgmt: dict) -> str:
+    """v0.9.8: a COMPACT breaker token for the visible DBG line. The SITREP tool
+    reads only the dbg string (emit_signal's symbol field), not the metrics
+    payload -- so the loss_breaker_threshold/headroom emitted since v0.9.7 were
+    invisible, and the operator kept re-deriving the breaker by hand (the
+    recurring equity*frac misread). This surfaces it where it is actually read:
+      -b<headroom>  breaker armed, <headroom> = further realized loss to the trip
+      -b!<over>     already TRIPPED (headroom <= 0), <over> past the threshold
+      -b?           armed but the fills window is unreadable this cycle
+      ""            breaker disabled (frac 0) -- nothing misleading emitted
+    """
+    hr = mgmt.get("loss_breaker_headroom")
+    if hr is not None:
+        return "-b{}".format(int(round(hr))) if hr > 0 else "-b!{}".format(int(round(-hr)))
+    if mgmt.get("loss_breaker_threshold") is not None:
+        return "-b?"   # armed (threshold computed) but realized PnL unreadable
+    return ""
+
+
+def _scan_digest(scans: list, min_score: float) -> str:
+    """v0.9.8: compact per-universe scan summary for the VISIBLE feed. The SITREP
+    reads signal symbol strings, not the metrics payload -- so per-name scores
+    were invisible and a missed trend (crypto ripping while the bot sat out on an
+    equity leg) could not be diagnosed from the operator's surface. One token per
+    universe:
+      <abbr>:n                       leader regime neutral -> universe stood down
+      <abbr>:<L|s>-                  gated, but no candidates scored
+      <abbr>:<L|s><SYM><score><q|x>  gated long/short; best candidate + score;
+                                     q = qualified (>= min_score, not skipped),
+                                     x = below the floor or hard-skipped
+    e.g. SCAN-cry:LETH62x-met:n-equ:LMSTR78q => crypto gated LONG but ETH's 62 was
+    below the 70 floor (the answer to 'why no crypto long in a +6% tape'); metals
+    neutral; equities gated long and MSTR qualified at 78. This makes the
+    pullback-fill / overextension hypotheses checkable from the feed alone."""
+    parts = []
+    for sc in scans:
+        abbr = str(sc.get("name", "?"))[:3]
+        d = sc.get("direction")
+        gate = "L" if d == "long" else ("s" if d == "short" else "n")
+        if gate == "n":
+            parts.append("{}:n".format(abbr))
+            continue
+        scored = sc.get("scored") or []
+        if not scored:
+            parts.append("{}:{}-".format(abbr, gate))
+            continue
+        best = max(scored, key=lambda s: getattr(s, "score", 0) or 0)
+        sym = str(getattr(best, "symbol", "?")).replace("USDT", "")[:4]
+        score = int(round(getattr(best, "score", 0) or 0))
+        ok = (not getattr(best, "skip", False)) and score >= min_score
+        parts.append("{}:{}{}{}{}".format(abbr, gate, sym, score, "q" if ok else "x"))
+    return ("SCAN-" + "-".join(parts))[:63]
+
+
 def _safe_manage(cfg: dict, follow: bool) -> dict:
     """Management snapshot, or a BLIND fallback. v0.9.4 (audit S-1): only a
     manage_open_state that RAN TO COMPLETION may authorize opens. The old
@@ -447,9 +504,12 @@ def run() -> None:
         tail = "perr." + preason
     else:
         tail = rshort
-    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}-{t}"
+    # v0.9.8: the breaker token rides between the trade block and the tail so the
+    # headroom is visible in the compact line (the only surface the SITREP reads).
+    bkr = _breaker_token(mgmt)
+    dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}{bk}-{t}"
            .format(f=int(follow), em=emc, own=own, pt=pT, op=oP, a=acts,
-                   c=int(called), p=pcode, t=tail))[:63]
+                   c=int(called), p=pcode, bk=bkr, t=tail))[:63]
     runtime.emit_signal(
         action="close", symbol=dbg, confidence=0.222,
         metrics={"dbg": dbg, "follow": follow, "exec_mode": exec_mode,
@@ -480,6 +540,24 @@ def run() -> None:
                  "called": called, "placed": placed, "reason": full_reason[:120]},
         meta={"dbg": dbg, "mgmt": _sanitize(mgmt)},
     )
+
+    # v0.9.8: a third, dedicated SCAN signal so the per-universe digest is visible
+    # in the operator's feed (which reads symbol strings, not metrics). This is the
+    # surface that answers 'why did the bot sit out a moving universe' -- gate
+    # direction + best candidate + score + qualified/skipped, per universe.
+    scan_line = str(decision.get("meta", {}).get("scan_digest", "SCAN-none"))[:63]
+    try:
+        runtime.emit_signal(
+            action="close", symbol=scan_line, confidence=0.111,
+            metrics={"scan_digest": scan_line,
+                     "regime_by_universe": decision.get("metrics", {}).get("regime_by_universe"),
+                     "best_score": decision.get("metrics", {}).get("best_score"),
+                     "min_score": decision.get("metrics", {}).get("min_score"),
+                     "analysis_version": ANALYSIS_VERSION},
+            meta={"scan_digest": scan_line},
+        )
+    except Exception:
+        pass  # the SCAN line is diagnostic-only; never let it break the cycle
 
 
 if __name__ == "__main__":
