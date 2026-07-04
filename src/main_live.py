@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.15"
+ANALYSIS_VERSION = "0.9.16"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -420,8 +420,11 @@ def _circuit_state_token(mgmt: dict) -> str:
     persistence probe: stuck at <=1 => .state/ does not carry => the equity circuit
     is non-functional. Emit -cx ONLY in that broken case (self-clears the moment
     runs climb); the fills-based loss_breaker (-b) is the real protection."""
+    ca = mgmt.get("controls_active")
+    if not isinstance(ca, dict):   # defensive: a malformed/absent controls map is never a warning
+        return ""
     runs = mgmt.get("state_runs")
-    if mgmt.get("controls_active", {}).get("circuit_breaker") and runs is not None and runs <= 1:
+    if ca.get("circuit_breaker") and isinstance(runs, (int, float)) and runs <= 1:
         return "-cx"
     return ""
 
@@ -462,8 +465,12 @@ def _held_token(mgmt: dict, cfg: dict) -> str:
       .t<age>/<max> = hours held / time_stop_hours ceiling (.t?/<max> if open-time
       unreadable -> the time-stop is blind on that position). Returns "" when nothing
       managed is held."""
-    diags = mgmt.get("position_diag") or []
-    managed = [d for d in diags if isinstance(d, dict) and d.get("move_pct") is not None]
+    diags = mgmt.get("position_diag")
+    if not isinstance(diags, list):   # defensive: only a list of diag dicts is ever iterable here
+        return ""
+    # move_pct must be numeric (not just present) so the int(round()) below can never raise on
+    # a malformed diag -- this is a live DBG path; a crash here would drop the cycle's emit.
+    managed = [d for d in diags if isinstance(d, dict) and isinstance(d.get("move_pct"), (int, float))]
     if not managed:
         return ""
     d = max(managed, key=lambda x: (x.get("age_h") is not None, x.get("age_h") or 0.0))
