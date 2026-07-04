@@ -246,6 +246,61 @@ def test_held_token_within_budget():
             "hld token capped so the compact line never overflows")
 
 
+# ---- _fold_exec_onto_scan (v0.9.17: the exec-state rides the VISIBLE surface) ----
+
+def test_fold_exec_basic_watch():
+    # flat watch: the DBG exec tail (no.neutral) now rides the SCAN line the operator
+    # actually sees -- the DBG emit was clobbered by this SCAN emit every cycle.
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, 1, "", "", "no.neutral", None)
+    _assert(out == "SCAN-cry:LADA82q|o0p1-no.neutral",
+            "watch: digest + o<own>p<pend> + tail, no breaker/fate -> " + out)
+
+
+def test_fold_exec_held_with_breaker():
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, 1, "-b45", "", "hld.MSTR+2a.t3/12", None)
+    _assert(out == "SCAN-cry:LADA82q|o0p1-b45-hld.MSTR+2a.t3/12",
+            "held: breaker headroom + hld tail both fold on when they fit -> " + out)
+
+
+def test_fold_exec_circuit_and_pending_unreadable():
+    # -cx (dead .state circuit) folds in; pT can be '?' when the pending book is blind
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, "?", "", "-cx", "no.lowscore", None)
+    _assert(out == "SCAN-cry:LADA82q|o0p?-cx-no.lowscore",
+            "-cx and an unreadable pending count both surface -> " + out)
+
+
+def test_fold_exec_fate_appended_when_it_fits():
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, 0, "", "", "no.neutral", "skip=fcr+47")
+    _assert(out == "SCAN-cry:LADA82q|o0p0-no.neutral|skip=fcr+47",
+            "leader_fate is appended after the exec seg when there is room -> " + out)
+
+
+def test_fold_exec_fate_dropped_never_truncates_tail():
+    # a full 3-universe digest + exec tail leaves no room for the fate: it is dropped
+    # WHOLE, never clipped into the tail.
+    digest = "SCAN-cry:LADA82q-met:sXAG60x-equ:LMSTR100q"
+    out = ml._fold_exec_onto_scan(digest, 0, 1, "", "", "no.lowscore", "demote:87->69")
+    _assert(out == digest + "|o0p1-no.lowscore",
+            "fate dropped intact when it would overflow -> " + out)
+    _assert("demote" not in out, "no partial fate bleed")
+
+
+def test_fold_exec_breaker_shed_first_to_protect_tail():
+    # with the breaker the line would overflow; the breaker headroom is shed first
+    # (it survives on the DBG metrics/token) so the held tail is preserved.
+    digest = "SCAN-cry:LADA82q-met:sXAG60x-equ:LMSTR100q"
+    out = ml._fold_exec_onto_scan(digest, 1, 0, "-b12", "", "hld.MSTR+2al", None)
+    _assert(len(out) <= 63, "never exceeds the 63-char budget")
+    _assert("-b12" not in out and "hld.MSTR+2al" in out,
+            "breaker headroom shed before the held tail is touched -> " + out)
+
+
+def test_fold_exec_always_within_budget():
+    digest = "SCAN-cry:LVERYLONG100q-met:sXAGXX99x-equ:LMSTRLONG100q"
+    out = ml._fold_exec_onto_scan(digest, 2, 3, "-b!99", "-cx", "hld.MSTR+12alr.t11/12", "outrank:ETHUS")
+    _assert(len(out) <= 63, "max-content fold still capped at 63 -> len " + str(len(out)))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

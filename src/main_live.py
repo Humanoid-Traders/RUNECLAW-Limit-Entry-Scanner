@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.16"
+ANALYSIS_VERSION = "0.9.17"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -560,6 +560,33 @@ def _scan_digest(scans: list, min_score: float) -> str:
     return ("SCAN-" + "-".join(parts))[:63]
 
 
+def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
+                         tail: str, fate) -> str:
+    """v0.9.17: the SITREP tool surfaces only the LAST per-cycle close-signal. Every
+    cycle emits DBG (the exec line) and then SCAN -- both action="close" -- so the
+    SCAN emit clobbers the DBG emit, and the exec-state (own/pending, the action
+    tail, the breaker headroom, the -cx dead-circuit warning) has been INVISIBLE on
+    the operator's surface since v0.9.8 first added the SCAN line after DBG. The
+    whole DBG-token investment (the v0.9.14 hld./no./bl. tails included) was landing
+    where the feed overwrites it. Fold the critical exec tokens onto the SCAN line --
+    the one surface that reaches the operator:
+        SCAN-<digest>|o<own>p<pend><breaker><cx>-<tail>[|<fate>]
+    Budget (63-char signal-symbol cap): the digest and the exec tail are never
+    sacrificed. The breaker headroom is dropped first under pressure (it stays on the
+    DBG metrics + token), then the leader_fate is appended only if it still fits.
+    DBG still emits unchanged for the metrics payload / deep debug."""
+    def _build(bk: str) -> str:
+        return "%s|o%sp%s%s%s-%s" % (scan_digest, own, pT, bk, cbx, tail)
+    line = _build(bkr)
+    if len(line) > 63 and bkr:           # protect the tail: shed breaker headroom first
+        line = _build("")
+    if fate:
+        cand = "%s|%s" % (line, fate)
+        if len(cand) <= 63:              # fate only if it still fits; never truncates the tail
+            line = cand
+    return line[:63]
+
+
 def _safe_manage(cfg: dict, follow: bool) -> dict:
     """Management snapshot, or a BLIND fallback. v0.9.4 (audit S-1): only a
     manage_open_state that RAN TO COMPLETION may authorize opens. The old
@@ -741,13 +768,16 @@ def run() -> None:
     # in the operator's feed (which reads symbol strings, not metrics). This is the
     # surface that answers 'why did the bot sit out a moving universe' -- gate
     # direction + best candidate + score + qualified/skipped, per universe.
-    scan_line = str(decision.get("meta", {}).get("scan_digest", "SCAN-none"))
+    scan_digest = str(decision.get("meta", {}).get("scan_digest", "SCAN-none"))
     # v0.9.9: fold the board-leader's fate onto the SCAN line so a passed-over
     # leader (the 08:49 ETH->TAO case) names its own reason in the visible feed.
     fate = decision.get("metrics", {}).get("leader_fate")
-    if fate:
-        scan_line = scan_line + "|" + str(fate)
-    scan_line = scan_line[:63]
+    # v0.9.17: fold the DBG exec-state (own/pending, the action tail, breaker, -cx)
+    # onto the SCAN line too -- the operator's tool surfaces only this (last) close-
+    # signal, so the separate DBG emit was never seen. Reuses the exact tokens the
+    # DBG line above computed (own/pT/bkr/cbx/tail).
+    scan_line = _fold_exec_onto_scan(scan_digest, own, pT, bkr, cbx, tail,
+                                     str(fate) if fate else None)
     try:
         runtime.emit_signal(
             action="close", symbol=scan_line, confidence=0.111,
