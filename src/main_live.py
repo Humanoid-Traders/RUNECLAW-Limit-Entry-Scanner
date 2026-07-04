@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.20"
+ANALYSIS_VERSION = "0.9.21"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -282,12 +282,14 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
 
     best = enriched[0]
     leader_fate = _leader_fate(leader_sym, leader_trace, best.symbol)
-    # v0.9.20 vol-regime gate (structural-sweep candidate; OPT-IN, default OFF). Stand
-    # aside when the chosen best's annualized realized vol is outside [vol_floor,
-    # vol_ceiling] -- refusing chaos-vol names, the deepest-drawdown class (halved
-    # maxDD in replay). Mirrors research/replay_mp's single-best gate so the validated
-    # threshold transfers. FAIL-OPEN (unreadable klines -> no gate) and cost-free when
-    # disabled: the extra kline fetch happens ONLY when armed, ONLY for the one best.
+    # v0.9.20 vol-regime gate (OPT-IN; DEFAULT OFF as of v0.9.21). Stand aside when the
+    # chosen best's annualized realized vol is outside [vol_floor, vol_ceiling].
+    # SHIPPED OFF: validated on the 14-symbol replay set (capped maxDD, net up) but on
+    # the LIVE 28-symbol universe it HALVES net every window (21/35/42d: +30/+69/+63% ->
+    # +18/+35/+35%) for only a 6pt DD reduction -- the high-vol alts it refuses are the
+    # winners here, not the drawdown drivers. Mechanism kept for per-universe opt-in via
+    # the card. FAIL-OPEN (unreadable klines -> no gate) and cost-free when disabled: the
+    # extra kline fetch happens ONLY when armed, ONLY for the one best.
     try:
         _vhi = float(cfg.get("vol_ceiling", "0") or "0")
         _vlo = float(cfg.get("vol_floor", "0") or "0")
