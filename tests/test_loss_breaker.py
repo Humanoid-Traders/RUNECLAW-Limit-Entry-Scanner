@@ -149,6 +149,34 @@ def test_breaker_failopen_unreadable_fills():
     _assert(st.get("realized_window_pnl") is None, "realized None recorded")
 
 
+def test_breaker_empty_window_is_full_headroom_not_blind():
+    # v0.9.18: a CLEAN empty fills read (breaker armed, nothing traded in the window)
+    # is realized 0 -> full headroom, so _breaker_token reads -b<threshold> (armed,
+    # room), NOT the ambiguous -b? a genuine read failure gives. This is the fix for
+    # the perpetual -b? on a fresh/quiet deployment (0 fills != read failure).
+    cfg = _wire_state([])  # fills(**k) -> [] : a SUCCESSFUL read with no rows
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("realized_window_pnl") == 0.0,
+            "empty-but-readable window -> realized 0.0 (not None)")
+    _assert(abs(st.get("loss_breaker_threshold") - 80.0) < 1e-6, "threshold 0.08*100*10 = 80")
+    _assert(abs(st.get("loss_breaker_headroom") - 80.0) < 1e-6,
+            "headroom = threshold + 0 = 80 -> token reads -b80 (armed, full room), not -b?")
+    _assert(not st.get("loss_breaker"), "0 realized never trips")
+
+
+def test_breaker_read_failure_still_blind():
+    # the empty-window fix must NOT mask a broken fills endpoint: a genuine read
+    # failure stays realized None -> headroom absent -> -b? (breaker blind, correct).
+    def _raise(**k):
+        raise RuntimeError("boom")
+    cfg = _wire_state([])
+    _trade.contract.fills = _raise
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("realized_window_pnl") is None, "read failure -> realized None (blind)")
+    _assert(st.get("loss_breaker_headroom") is None,
+            "no headroom when blind -> -b? preserved (blind-detection intact)")
+
+
 # ---- open_if_allowed pause ----
 
 def test_open_if_allowed_pauses_on_breaker():

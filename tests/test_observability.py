@@ -222,21 +222,24 @@ def test_held_token_none_when_nothing_managed():
 
 
 def test_held_token_surfaces_move_flags_and_age():
-    # MSTR up 4%, breakeven armed + lock floored + trail set, 9h into a 12h ceiling.
+    # MSTR up 4%, breakeven armed + lock floored + trail set, 9h held.
+    # v0.9.18: age renders as ".t9h" (elapsed hours), NOT ".t9/12" -- the fixed cap
+    # was dropped because appending it let the fold's 63-char clip shear "/12" into a
+    # misleading "/1" (the live LAB t3/1 false alarm).
     diag = _diag("MSTRUSDT", 4.3, 9.2, be_armed=True, be_lock=100.7, trail="set:100.7000")
     tok = ml._held_token({"position_diag": [diag]}, {"time_stop_hours": "12"})
-    _assert(tok == "hld.MSTR+4alr.t9/12",
-            "hld names sym, +move, flags(a=armed,l=lock,r=trail), age/cap -> " + tok)
+    _assert(tok == "hld.MSTR+4alr.t9h",
+            "hld names sym, +move, flags(a=armed,l=lock,r=trail), elapsed hours -> " + tok)
 
 
 def test_held_token_picks_oldest_and_blind_timestop():
     young = _diag("NVDAUSDT", 1.0, 2.0)
     # old is the oldest by age_h but ts_ok False -> its open-time is unreadable, so
-    # the time-stop is blind on it (the more urgent thing to show): .t?/cap.
+    # the time-stop is blind on it (the more urgent thing to show): .t?h.
     old = _diag("TSLAUSDT", -2.0, 8.0, ts_ok=False)
     tok = ml._held_token({"position_diag": [young, old]}, {"time_stop_hours": "12"})
-    _assert(tok == "hld.TSLA-2.t?/12",
-            "oldest held wins; ts_ok False -> .t?/cap (time-stop is blind on it) -> " + tok)
+    _assert(tok == "hld.TSLA-2.t?h",
+            "oldest held wins; ts_ok False -> .t?h (time-stop is blind on it) -> " + tok)
 
 
 def test_held_token_within_budget():
@@ -244,6 +247,20 @@ def test_held_token_within_budget():
                  so="trimmed:5", trail="set:1.0")
     _assert(len(ml._held_token({"position_diag": [diag]}, {})) <= 32,
             "hld token capped so the compact line never overflows")
+
+
+def test_fold_held_time_never_clips_to_misleading_denominator():
+    # regression for the live LAB `t3/1` false alarm: a flags-bearing held token + a
+    # full 3-universe digest was 64 chars, so `[:63]` sheared "/12" into a misleading
+    # "/1" that read as "time-stop overdue". With ".t3h" the field is shorter and the
+    # exact live line now fits intact.
+    diag = _diag("LABUSDT", 9.0, 3.0, be_armed=True, be_lock=10.2)
+    held = ml._held_token({"position_diag": [diag]}, {"time_stop_hours": "12"})
+    _assert(held == "hld.LAB+9al.t3h", "held renders elapsed hours -> " + held)
+    line = ml._fold_exec_onto_scan("SCAN-cry:LLAB70q-met:LXAG72q-equ:LTSLA67x",
+                                   2, 0, "", "", held, None, follow=True)
+    _assert(len(line) <= 63, "the live 3-universe + held line fits -> len " + str(len(line)))
+    _assert(line.endswith(".t3h"), "time field intact, never clipped mid-token -> " + line)
 
 
 # ---- _fold_exec_onto_scan (v0.9.17: the exec-state rides the VISIBLE surface) ----
@@ -299,6 +316,65 @@ def test_fold_exec_always_within_budget():
     digest = "SCAN-cry:LVERYLONG100q-met:sXAGXX99x-equ:LMSTRLONG100q"
     out = ml._fold_exec_onto_scan(digest, 2, 3, "-b!99", "-cx", "hld.MSTR+12alr.t11/12", "outrank:ETHUS")
     _assert(len(out) <= 63, "max-content fold still capped at 63 -> len " + str(len(out)))
+
+
+def test_fold_exec_nof_marker_on_non_follow():
+    # v0.9.18: a non-follow cycle (eval run / outside the execution window) leads the
+    # exec segment with `nof` so the otherwise-opaque pre-window line (o0p?-none)
+    # announces 'not following -> scanned, did not trade' instead of reading as a fault.
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, "?", "", "", "none", None, follow=False)
+    _assert(out == "SCAN-cry:LADA82q|nof-o0p?-none",
+            "non-follow cycle gets the nof marker -> " + out)
+
+
+def test_fold_exec_no_marker_on_follow():
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, 0, "", "", "no.neutral", None, follow=True)
+    _assert(out == "SCAN-cry:LADA82q|o0p0-no.neutral" and "nof" not in out,
+            "a normal follow cycle stays clean -- no nof marker -> " + out)
+
+
+# ---- _dbg_tail (v0.9.18: the tail priority chain, extracted + golden-tested) ----
+
+def _tail(**kw):
+    d = dict(blind="", acts=0, act_label="", xpd="", held="", watch_reason="",
+             action="watch", symbol="?", pT=0, preason="", full_reason="none", rshort="none")
+    d.update(kw)
+    return ml._dbg_tail(d["blind"], d["acts"], d["act_label"], d["xpd"], d["held"],
+                        d["watch_reason"], d["action"], d["symbol"], d["pT"],
+                        d["preason"], d["full_reason"], d["rshort"])
+
+
+def test_dbg_tail_sig_never_masks_a_real_reason():
+    # THE regression this guards (caught live on the 0.6.25 SITREP before v0.9.18
+    # shipped): an actionable decision that came back with a REAL open-path reason
+    # (entry_already_pending) must show that reason, NOT sig.LMSTR.
+    _assert(_tail(action="long", symbol="MSTRUSDT", full_reason="entry_already_pending",
+                  rshort="entry_already_pending") == "entry_already_pending",
+            "a real open-path reason wins via rshort -- sig. never masks it")
+    _assert(_tail(action="long", symbol="HYPEUSDT", full_reason="none") == "sig.LHYPE",
+            "actionable + bare 'none' -> sig.<L|s><SYM> (name the intended trade)")
+    _assert(_tail(action="short", symbol="XAGUSDT", full_reason="none") == "sig.sXAG",
+            "short intent -> sig.s<SYM>")
+
+
+def test_dbg_tail_priority_order():
+    # bl > act > xpd > hld > no > perr > sig > rshort
+    _assert(_tail(blind="bl.crash:X", acts=1, act_label="time_stop_close",
+                  action="long", full_reason="none") == "bl.crash:X",
+            "state_blind dominates everything")
+    _assert(_tail(acts=1, act_label="steplock", held="hld.MSTR+2a") == "act.steplock",
+            "a fired action beats a held-state readout")
+    _assert(_tail(xpd="stuck5h", held="hld.MSTR+2a") == "xpd.stuck5h",
+            "a stuck-expiry beats a held readout")
+    _assert(_tail(held="hld.MSTR+2a", watch_reason="all_regimes_neutral",
+                  action="watch") == "hld.MSTR+2a",
+            "a held position beats a watch reason")
+    _assert(_tail(watch_reason="all_regimes_neutral", action="watch") == "no.neutral",
+            "watch stand-down -> no.<reason>")
+    _assert(_tail(pT="0", preason="40019:margin", action="long",
+                  full_reason="none") == "perr.40019:margin",
+            "a genuine pending failure (perr) beats sig.")
+    _assert(_tail(rshort="cooldown") == "cooldown", "nothing matched -> rshort fallback")
 
 
 if __name__ == "__main__":

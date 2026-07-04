@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.17"
+ANALYSIS_VERSION = "0.9.18"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -484,15 +484,17 @@ def _held_token(mgmt: dict, cfg: dict) -> str:
         flags += "s"
     if str(d.get("trail", "")).startswith("set:"):
         flags += "r"
-    try:
-        cap = int(round(float(cfg.get("time_stop_hours", "12") or "12")))
-    except (TypeError, ValueError):
-        cap = 12
+    # v0.9.18 fix: render the age as ".t<hours>h", NOT ".t<age>/<cap>". The cap
+    # (time_stop_hours) is a fixed config constant, and appending it pushed a
+    # flags-bearing held token + a full 3-universe digest to 64 chars, so the fold's
+    # 63-char clip sheared the last digit of "/12" -> a misleading "/1" that read as
+    # "time-stop at 1h, overdue" (the live LAB runner false alarm). Elapsed hours is
+    # the actionable number and can never mis-clip; the 12h ceiling is documented.
     tok = "hld.%s%+d%s" % (sym, int(round(d["move_pct"])), flags)
     if d.get("ts_ok") and d.get("age_h") is not None:
-        tok += ".t%d/%d" % (int(d["age_h"]), cap)
+        tok += ".t%dh" % int(d["age_h"])
     else:
-        tok += ".t?/%d" % cap
+        tok += ".t?h"     # open-time unreadable -> the time-stop is blind on this position
     return tok[:32]
 
 
@@ -561,7 +563,7 @@ def _scan_digest(scans: list, min_score: float) -> str:
 
 
 def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
-                         tail: str, fate) -> str:
+                         tail: str, fate, follow: bool = True) -> str:
     """v0.9.17: the SITREP tool surfaces only the LAST per-cycle close-signal. Every
     cycle emits DBG (the exec line) and then SCAN -- both action="close" -- so the
     SCAN emit clobbers the DBG emit, and the exec-state (own/pending, the action
@@ -574,9 +576,15 @@ def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
     Budget (63-char signal-symbol cap): the digest and the exec tail are never
     sacrificed. The breaker headroom is dropped first under pressure (it stays on the
     DBG metrics + token), then the leader_fate is appended only if it still fits.
-    DBG still emits unchanged for the metrics payload / deep debug."""
+    DBG still emits unchanged for the metrics payload / deep debug.
+
+    v0.9.18: a `nof` marker leads the exec segment on a NON-follow cycle (eval run /
+    outside the execution window) so an opaque pre-window line (o0p?-none) announces
+    itself as 'not following, so it scanned but did not trade' instead of reading as a
+    malfunction. Follow cycles (the normal case) stay clean -- no marker."""
+    lead = "" if follow else "nof-"
     def _build(bk: str) -> str:
-        return "%s|o%sp%s%s%s-%s" % (scan_digest, own, pT, bk, cbx, tail)
+        return "%s|%so%sp%s%s%s-%s" % (scan_digest, lead, own, pT, bk, cbx, tail)
     line = _build(bkr)
     if len(line) > 63 and bkr:           # protect the tail: shed breaker headroom first
         line = _build("")
@@ -585,6 +593,41 @@ def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
         if len(cand) <= 63:              # fate only if it still fits; never truncates the tail
             line = cand
     return line[:63]
+
+
+def _dbg_tail(blind, acts, act_label, xpd, held, watch_reason,
+              action, symbol, pT, preason, full_reason, rshort):
+    """The DBG/SCAN tail selector, extracted from run() so the priority chain is
+    UNIT-TESTABLE. It regressed twice while inline (a mis-ordered branch silently
+    shadowed a more informative one), so it now lives here with golden tests. First
+    match wins, most-urgent first:
+      bl.<why>   state_blind -- the book couldn't be read (own/act unreliable)
+      act.<t>    a management action fired this cycle
+      xpd.<d>    a stuck owned-pending order the bot can't time-expire
+      hld.<...>  a position is held and quiet -- its live state
+      no.<r>     a watch stand-down -- WHY the cycle placed nothing
+      perr.<c>   the pending fetch genuinely FAILED (pT==0 + a reason)
+      sig.<Ls>   an actionable decision whose open path gave NO reason -- name the
+                 intended trade. GATED on full_reason == 'none' so a REAL open-path
+                 reason (entry_already_pending, cooldown, sizing_failed, ...) is never
+                 masked -- it wins via rshort below. This gate is the fix for the
+                 v0.9.18 regression that shadowed entry_already_pending with sig.LMSTR.
+      <rshort>   fallback: the raw open-path reason / decided outcome."""
+    if blind:
+        return blind
+    if acts and act_label:
+        return "act." + str(act_label)[:28]
+    if xpd:
+        return "xpd." + xpd
+    if held:
+        return held
+    if watch_reason:
+        return "no." + _watch_short(watch_reason)
+    if str(pT) == "0" and preason:
+        return "perr." + preason
+    if action in ("long", "short") and str(full_reason) == "none":
+        return "sig." + ("L" if action == "long" else "s") + str(symbol).replace("USDT", "")[:5]
+    return rshort
 
 
 def _safe_manage(cfg: dict, follow: bool) -> dict:
@@ -701,24 +744,9 @@ def run() -> None:
     held = _held_token(mgmt, cfg)
     watch_reason = (str(decision.get("meta", {}).get("reason", ""))
                     if decision.get("action") == "watch" else "")
-    if blind:
-        tail = blind
-    elif acts and act_label:
-        tail = "act." + act_label[:28]
-    elif xpd:
-        # Surface the stuck-expiry diagnostic over the scan reason: an order the bot
-        # cannot time-expire is more urgent than why nothing was placed. (xpd and
-        # perr are mutually exclusive in practice -- xpd needs an owned pending to
-        # exist, perr fires only when pT==0.) Full scan reason stays in metrics.
-        tail = "xpd." + xpd
-    elif held:
-        tail = held
-    elif watch_reason:
-        tail = "no." + _watch_short(watch_reason)
-    elif str(pT) == "0" and preason:
-        tail = "perr." + preason
-    else:
-        tail = rshort
+    tail = _dbg_tail(blind, acts, act_label, xpd, held, watch_reason,
+                     decision.get("action"), decision.get("symbol", "?"),
+                     pT, preason, full_reason, rshort)
     # v0.9.8: the breaker token rides between the trade block and the tail so the
     # headroom is visible in the compact line (the only surface the SITREP reads).
     # v0.9.14: -cx follows it iff the equity circuit claims active on a .state/ that
@@ -777,7 +805,7 @@ def run() -> None:
     # signal, so the separate DBG emit was never seen. Reuses the exact tokens the
     # DBG line above computed (own/pT/bkr/cbx/tail).
     scan_line = _fold_exec_onto_scan(scan_digest, own, pT, bkr, cbx, tail,
-                                     str(fate) if fate else None)
+                                     str(fate) if fate else None, follow=follow)
     try:
         runtime.emit_signal(
             action="close", symbol=scan_line, confidence=0.111,
