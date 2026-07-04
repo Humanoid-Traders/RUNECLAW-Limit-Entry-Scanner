@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.19"
+ANALYSIS_VERSION = "0.9.20"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -282,6 +282,26 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
 
     best = enriched[0]
     leader_fate = _leader_fate(leader_sym, leader_trace, best.symbol)
+    # v0.9.20 vol-regime gate (structural-sweep candidate; OPT-IN, default OFF). Stand
+    # aside when the chosen best's annualized realized vol is outside [vol_floor,
+    # vol_ceiling] -- refusing chaos-vol names, the deepest-drawdown class (halved
+    # maxDD in replay). Mirrors research/replay_mp's single-best gate so the validated
+    # threshold transfers. FAIL-OPEN (unreadable klines -> no gate) and cost-free when
+    # disabled: the extra kline fetch happens ONLY when armed, ONLY for the one best.
+    try:
+        _vhi = float(cfg.get("vol_ceiling", "0") or "0")
+        _vlo = float(cfg.get("vol_floor", "0") or "0")
+    except (TypeError, ValueError):
+        _vhi = _vlo = 0.0
+    if _vhi > 0 or _vlo > 0:
+        _k = str(cfg.get("kline_interval", "1h"))
+        _vlb = int(cfg.get("vol_lookback", 30))
+        _vb = features._closed_bars(
+            features.fetch_klines(best.symbol, interval=_k, limit=_vlb + 3), _k)
+        _rv = features.realized_vol(_vb, _vlb) if _vb else None
+        if _rv is not None and ((_vlo > 0 and _rv < _vlo) or (_vhi > 0 and _rv > _vhi)):
+            return watch(best.symbol, "vol_regime_%d" % int(round(_rv)),
+                         {"tradable_candidates": len(enriched), "leader_fate": leader_fate})
     plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side,
                            entry_mode=best.entry_mode)
     if plan is None or not plan.sizing_ok:

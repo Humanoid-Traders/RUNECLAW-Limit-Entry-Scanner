@@ -225,6 +225,29 @@ def _wilder_atr(bars: list, period: int) -> Optional[float]:
     return atr if atr > 0 else None
 
 
+def realized_vol(bars: list, lookback: int = 30, ppy: int = 8760) -> Optional[float]:
+    """v0.9.20: annualized realized volatility (%) = std of log returns over the
+    last ``lookback`` closed 1h bars x sqrt(periods/yr) x 100. ppy=8760 (hourly).
+    None if too few clean bars. Byte-mirrors research/replay.py:realized_vol so the
+    sweep-validated vol-ceiling threshold transfers to live -- used by the vol-regime
+    gate to stand aside on chaos-vol names (empirically the deepest-drawdown class:
+    excluding them halved maxDD in the 21/35/42d replay windows). Reads closes via
+    the same _bar_f accessor as _wilder_atr so it is robust to the live bar shape."""
+    closes = []
+    for b in bars[-(lookback + 1):]:
+        c = _bar_f(b, _BAR_C)
+        if c is not None and c > 0:
+            closes.append(c)
+    if len(closes) < lookback + 1:
+        return None
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    if len(rets) < 2:
+        return None
+    m = sum(rets) / len(rets)
+    var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+    return (var ** 0.5) * (ppy ** 0.5) * 100.0
+
+
 def _ema_trend(bars: list, lookback: int, norm: float) -> tuple:
     """(trend_dir, trend_strength[0,1]) from last close vs EMA(lookback)."""
     closes = [c for c in (_bar_f(b, _BAR_C) for b in bars) if c is not None]

@@ -132,6 +132,40 @@ def test_closed_bars_failopen():
     _assert(features._closed_bars([], "1h") == [], "empty list passthrough")
 
 
+# ---- realized_vol goldens (v0.9.20 vol-regime gate input) ----
+
+def _cbar(c):
+    return {"close": c}
+
+
+def test_realized_vol_matches_definition():
+    import math
+    import statistics
+    closes = [100, 105, 100, 105, 100]                 # lookback=4 -> 5 closes, 4 log-rets
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    expected = statistics.stdev(rets) * math.sqrt(8760) * 100.0   # sample std (n-1), hourly ppy
+    got = features.realized_vol([_cbar(c) for c in closes], lookback=4)
+    _assert(got is not None and abs(got - expected) < 1e-9,
+            "realized_vol == std(log-rets) x sqrt(8760) x 100 -> %.1f%%" % got)
+
+
+def test_realized_vol_constant_is_zero():
+    _assert(features.realized_vol([_cbar(100.0)] * 40, lookback=30) == 0.0,
+            "flat closes -> 0 realized vol")
+
+
+def test_realized_vol_too_few_bars_none():
+    _assert(features.realized_vol([_cbar(100.0)] * 5, lookback=30) is None,
+            "fewer than lookback+1 clean closes -> None (the gate then fail-opens)")
+
+
+def test_realized_vol_uses_only_last_lookback():
+    tail = [_cbar(c) for c in [100, 101, 100, 101, 100]]           # lookback=4 window
+    noisy = [_cbar(c) for c in [1, 1000, 1, 1000]] + tail          # older wild bars, must be ignored
+    _assert(abs(features.realized_vol(noisy, 4) - features.realized_vol(tail, 4)) < 1e-9,
+            "only the last lookback+1 bars enter the vol -> older bars ignored")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
