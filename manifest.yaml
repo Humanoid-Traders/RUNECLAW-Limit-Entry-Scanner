@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.18"
+version: "0.9.19"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -87,7 +87,13 @@ strategy_config:
   conditional_score: 50
   min_volume_usdt: "10000000"
   atr_limit_mult: "0.3"
-  max_vwap_ext_pct: "4.0"
+  # v0.9.19 -- widened 4.0 -> 5.0 by the structural sweep (OOS-verified across 21/35/42d
+  # breakout windows). The overextension cap doubles as the breakout-routing trigger:
+  # at 4.0, names in the 4-5% extension band were routed to market breakout chases that
+  # mostly bled; 5.0 prunes those marginal extended entries. Net +1.5 to +6pt with maxDD
+  # flat-or-shallower and PF up in every window, stacks cleanly with breakout_trend_min
+  # 0.7 (distinct mechanism). Equities keep their tighter 2.5 per-universe override.
+  max_vwap_ext_pct: "5.0"
   tp1_pct: "5.0"
   # v0.6.3 — trailing-stop exit (validated in research/replay_mp.py at 3-slot
   # concurrency). The manager ratchets the SL to price -/+ trail_atr_mult*ATR
@@ -242,7 +248,12 @@ strategy_config:
   # docs/DESIGN_v0.5.0.md. v0.5.1: enabled by default + exposed as a subscriber
   # toggle so the crypto breakout path runs live (was off-by-default in v0.5.0).
   breakout_enabled: true
-  breakout_trend_min: "0.6"        # min kline trend_strength [0,1] to confirm
+  # v0.9.19 -- raised 0.6 -> 0.7 (structural sweep, OOS-verified). This is the higher-TF
+  # trend-strength floor a breakout must clear or it is demoted to breakout_unconfirmed.
+  # 0.7 removes the [0.6,0.7) weak-trend / false-breakout class (the -59%-then-recover
+  # whipsaws): net +4.9pt in EVERY window (21/35/42d) with maxDD and worst-trade UNCHANGED
+  # -- pure removal of weak-breakout bleed, no tail cost. 0.8 adds nothing beyond 0.7.
+  breakout_trend_min: "0.7"        # min kline trend_strength [0,1] to confirm
   breakout_extreme_band: "0.015"   # must be within 1.5% of the 24h extreme
   breakout_stop_atr_mult: "1.0"    # structure-stop volatility floor in ATRs
   breakout_level_buffer_pct: "0.2" # stop sits this % beyond the broken level
@@ -347,7 +358,7 @@ user_config_schema:
     label: "Limit-entry depth (x ATR from VWAP; lower fills sooner)"
   max_vwap_ext_pct:
     type: string
-    default: "4.0"
+    default: "5.0"     # v0.9.19: kept in sync with strategy_config (see the runtime value above)
     pattern: "^[0-9]+(\\.[0-9]+)?$"
     label: "Max distance from VWAP to enter (%; beyond this a strong-trend crypto name is a breakout, not a pullback)"
   breakout_enabled:
