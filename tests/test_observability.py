@@ -316,6 +316,50 @@ def test_fold_exec_no_marker_on_follow():
             "a normal follow cycle stays clean -- no nof marker -> " + out)
 
 
+# ---- _dbg_tail (v0.9.18: the tail priority chain, extracted + golden-tested) ----
+
+def _tail(**kw):
+    d = dict(blind="", acts=0, act_label="", xpd="", held="", watch_reason="",
+             action="watch", symbol="?", pT=0, preason="", full_reason="none", rshort="none")
+    d.update(kw)
+    return ml._dbg_tail(d["blind"], d["acts"], d["act_label"], d["xpd"], d["held"],
+                        d["watch_reason"], d["action"], d["symbol"], d["pT"],
+                        d["preason"], d["full_reason"], d["rshort"])
+
+
+def test_dbg_tail_sig_never_masks_a_real_reason():
+    # THE regression this guards (caught live on the 0.6.25 SITREP before v0.9.18
+    # shipped): an actionable decision that came back with a REAL open-path reason
+    # (entry_already_pending) must show that reason, NOT sig.LMSTR.
+    _assert(_tail(action="long", symbol="MSTRUSDT", full_reason="entry_already_pending",
+                  rshort="entry_already_pending") == "entry_already_pending",
+            "a real open-path reason wins via rshort -- sig. never masks it")
+    _assert(_tail(action="long", symbol="HYPEUSDT", full_reason="none") == "sig.LHYPE",
+            "actionable + bare 'none' -> sig.<L|s><SYM> (name the intended trade)")
+    _assert(_tail(action="short", symbol="XAGUSDT", full_reason="none") == "sig.sXAG",
+            "short intent -> sig.s<SYM>")
+
+
+def test_dbg_tail_priority_order():
+    # bl > act > xpd > hld > no > perr > sig > rshort
+    _assert(_tail(blind="bl.crash:X", acts=1, act_label="time_stop_close",
+                  action="long", full_reason="none") == "bl.crash:X",
+            "state_blind dominates everything")
+    _assert(_tail(acts=1, act_label="steplock", held="hld.MSTR+2a") == "act.steplock",
+            "a fired action beats a held-state readout")
+    _assert(_tail(xpd="stuck5h", held="hld.MSTR+2a") == "xpd.stuck5h",
+            "a stuck-expiry beats a held readout")
+    _assert(_tail(held="hld.MSTR+2a", watch_reason="all_regimes_neutral",
+                  action="watch") == "hld.MSTR+2a",
+            "a held position beats a watch reason")
+    _assert(_tail(watch_reason="all_regimes_neutral", action="watch") == "no.neutral",
+            "watch stand-down -> no.<reason>")
+    _assert(_tail(pT="0", preason="40019:margin", action="long",
+                  full_reason="none") == "perr.40019:margin",
+            "a genuine pending failure (perr) beats sig.")
+    _assert(_tail(rshort="cooldown") == "cooldown", "nothing matched -> rshort fallback")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

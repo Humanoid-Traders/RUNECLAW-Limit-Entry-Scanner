@@ -593,6 +593,41 @@ def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
     return line[:63]
 
 
+def _dbg_tail(blind, acts, act_label, xpd, held, watch_reason,
+              action, symbol, pT, preason, full_reason, rshort):
+    """The DBG/SCAN tail selector, extracted from run() so the priority chain is
+    UNIT-TESTABLE. It regressed twice while inline (a mis-ordered branch silently
+    shadowed a more informative one), so it now lives here with golden tests. First
+    match wins, most-urgent first:
+      bl.<why>   state_blind -- the book couldn't be read (own/act unreliable)
+      act.<t>    a management action fired this cycle
+      xpd.<d>    a stuck owned-pending order the bot can't time-expire
+      hld.<...>  a position is held and quiet -- its live state
+      no.<r>     a watch stand-down -- WHY the cycle placed nothing
+      perr.<c>   the pending fetch genuinely FAILED (pT==0 + a reason)
+      sig.<Ls>   an actionable decision whose open path gave NO reason -- name the
+                 intended trade. GATED on full_reason == 'none' so a REAL open-path
+                 reason (entry_already_pending, cooldown, sizing_failed, ...) is never
+                 masked -- it wins via rshort below. This gate is the fix for the
+                 v0.9.18 regression that shadowed entry_already_pending with sig.LMSTR.
+      <rshort>   fallback: the raw open-path reason / decided outcome."""
+    if blind:
+        return blind
+    if acts and act_label:
+        return "act." + str(act_label)[:28]
+    if xpd:
+        return "xpd." + xpd
+    if held:
+        return held
+    if watch_reason:
+        return "no." + _watch_short(watch_reason)
+    if str(pT) == "0" and preason:
+        return "perr." + preason
+    if action in ("long", "short") and str(full_reason) == "none":
+        return "sig." + ("L" if action == "long" else "s") + str(symbol).replace("USDT", "")[:5]
+    return rshort
+
+
 def _safe_manage(cfg: dict, follow: bool) -> dict:
     """Management snapshot, or a BLIND fallback. v0.9.4 (audit S-1): only a
     manage_open_state that RAN TO COMPLETION may authorize opens. The old
@@ -707,33 +742,9 @@ def run() -> None:
     held = _held_token(mgmt, cfg)
     watch_reason = (str(decision.get("meta", {}).get("reason", ""))
                     if decision.get("action") == "watch" else "")
-    if blind:
-        tail = blind
-    elif acts and act_label:
-        tail = "act." + act_label[:28]
-    elif xpd:
-        # Surface the stuck-expiry diagnostic over the scan reason: an order the bot
-        # cannot time-expire is more urgent than why nothing was placed. (xpd and
-        # perr are mutually exclusive in practice -- xpd needs an owned pending to
-        # exist, perr fires only when pT==0.) Full scan reason stays in metrics.
-        tail = "xpd." + xpd
-    elif held:
-        tail = held
-    elif watch_reason:
-        tail = "no." + _watch_short(watch_reason)
-    elif decision.get("action") in ("long", "short"):
-        # v0.9.18: an actionable decision that isn't otherwise explained (a placed
-        # entry, or a would-be entry that the callback didn't execute -- signal-only
-        # / pre-window) used to collapse to a bare 'none'. Name the intended trade
-        # (sig.<L|s><SYM>); the pcode (p1 placed / p0 not / pB breakout) already says
-        # whether it went on, so sig.LHYPE + p0 reads 'wanted long HYPE, didn't place'.
-        _dsym = str(decision.get("symbol", "?")).replace("USDT", "")[:5]
-        _dside = "L" if decision.get("action") == "long" else "s"
-        tail = "sig." + _dside + _dsym
-    elif str(pT) == "0" and preason:
-        tail = "perr." + preason
-    else:
-        tail = rshort
+    tail = _dbg_tail(blind, acts, act_label, xpd, held, watch_reason,
+                     decision.get("action"), decision.get("symbol", "?"),
+                     pT, preason, full_reason, rshort)
     # v0.9.8: the breaker token rides between the trade block and the tail so the
     # headroom is visible in the compact line (the only surface the SITREP reads).
     # v0.9.14: -cx follows it iff the equity circuit claims active on a .state/ that
