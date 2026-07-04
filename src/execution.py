@@ -418,7 +418,12 @@ def _read_fills(limit: int = 100) -> Optional[list]:
     except Exception:
         pass  # no is_success -> fall through and try to parse rows
     rows = _extract_rows(result)
-    return rows or None
+    # v0.9.18: a SUCCESSFUL read that simply has no fills returns [] (not None), so
+    # the loss breaker can tell "read ok, nothing traded yet" (realized 0 -> armed with
+    # full headroom, -b<threshold>) apart from "read FAILED" (None -> blind, -b?). The
+    # perpetual -b? on a fresh/quiet deployment was this collapse. Callers that guard
+    # `if fills_rows:` are unaffected -- [] and None are both falsy for "no fills".
+    return rows if isinstance(rows, list) else []
 
 
 def _fills_in_window(rows: list, window_hours: float) -> list:
@@ -674,7 +679,18 @@ def manage_open_state(cfg: dict) -> dict:
             except (TypeError, ValueError):
                 margin, lev = 100.0, 10
             threshold = lb_frac * margin * lev
-            realized = _realized_pnl(fills_rows, lb_window) if fills_rows else None
+            # v0.9.18: tell a CLEAN-but-empty fills window (read ok, nothing traded in
+            # the window -> realized 0, full headroom -> -b<threshold>) apart from a
+            # genuinely unreadable one (read failed / all fills scoped out -> None ->
+            # breaker blind -> -b?). Before, both collapsed to None, so a fresh or quiet
+            # deployment showed a perpetual, misleading -b?. Blind-detection preserved:
+            # only a real read failure (fills_rows is None) leaves realized None.
+            if fills_rows is None:
+                realized = None
+            elif not fills_rows:
+                realized = 0.0
+            else:
+                realized = _realized_pnl(fills_rows, lb_window)
             status["realized_window_pnl"] = None if realized is None else round(realized, 4)
             # v0.9.7 observability: emit the breaker's own arithmetic so the
             # operator never re-derives it (the recurring equity*frac misread).

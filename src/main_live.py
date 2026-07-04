@@ -18,7 +18,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.17"
+ANALYSIS_VERSION = "0.9.18"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -561,7 +561,7 @@ def _scan_digest(scans: list, min_score: float) -> str:
 
 
 def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
-                         tail: str, fate) -> str:
+                         tail: str, fate, follow: bool = True) -> str:
     """v0.9.17: the SITREP tool surfaces only the LAST per-cycle close-signal. Every
     cycle emits DBG (the exec line) and then SCAN -- both action="close" -- so the
     SCAN emit clobbers the DBG emit, and the exec-state (own/pending, the action
@@ -574,9 +574,15 @@ def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
     Budget (63-char signal-symbol cap): the digest and the exec tail are never
     sacrificed. The breaker headroom is dropped first under pressure (it stays on the
     DBG metrics + token), then the leader_fate is appended only if it still fits.
-    DBG still emits unchanged for the metrics payload / deep debug."""
+    DBG still emits unchanged for the metrics payload / deep debug.
+
+    v0.9.18: a `nof` marker leads the exec segment on a NON-follow cycle (eval run /
+    outside the execution window) so an opaque pre-window line (o0p?-none) announces
+    itself as 'not following, so it scanned but did not trade' instead of reading as a
+    malfunction. Follow cycles (the normal case) stay clean -- no marker."""
+    lead = "" if follow else "nof-"
     def _build(bk: str) -> str:
-        return "%s|o%sp%s%s%s-%s" % (scan_digest, own, pT, bk, cbx, tail)
+        return "%s|%so%sp%s%s%s-%s" % (scan_digest, lead, own, pT, bk, cbx, tail)
     line = _build(bkr)
     if len(line) > 63 and bkr:           # protect the tail: shed breaker headroom first
         line = _build("")
@@ -715,6 +721,15 @@ def run() -> None:
         tail = held
     elif watch_reason:
         tail = "no." + _watch_short(watch_reason)
+    elif decision.get("action") in ("long", "short"):
+        # v0.9.18: an actionable decision that isn't otherwise explained (a placed
+        # entry, or a would-be entry that the callback didn't execute -- signal-only
+        # / pre-window) used to collapse to a bare 'none'. Name the intended trade
+        # (sig.<L|s><SYM>); the pcode (p1 placed / p0 not / pB breakout) already says
+        # whether it went on, so sig.LHYPE + p0 reads 'wanted long HYPE, didn't place'.
+        _dsym = str(decision.get("symbol", "?")).replace("USDT", "")[:5]
+        _dside = "L" if decision.get("action") == "long" else "s"
+        tail = "sig." + _dside + _dsym
     elif str(pT) == "0" and preason:
         tail = "perr." + preason
     else:
@@ -777,7 +792,7 @@ def run() -> None:
     # signal, so the separate DBG emit was never seen. Reuses the exact tokens the
     # DBG line above computed (own/pT/bkr/cbx/tail).
     scan_line = _fold_exec_onto_scan(scan_digest, own, pT, bkr, cbx, tail,
-                                     str(fate) if fate else None)
+                                     str(fate) if fate else None, follow=follow)
     try:
         runtime.emit_signal(
             action="close", symbol=scan_line, confidence=0.111,

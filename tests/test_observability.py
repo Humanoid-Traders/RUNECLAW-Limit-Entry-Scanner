@@ -301,6 +301,21 @@ def test_fold_exec_always_within_budget():
     _assert(len(out) <= 63, "max-content fold still capped at 63 -> len " + str(len(out)))
 
 
+def test_fold_exec_nof_marker_on_non_follow():
+    # v0.9.18: a non-follow cycle (eval run / outside the execution window) leads the
+    # exec segment with `nof` so the otherwise-opaque pre-window line (o0p?-none)
+    # announces 'not following -> scanned, did not trade' instead of reading as a fault.
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, "?", "", "", "none", None, follow=False)
+    _assert(out == "SCAN-cry:LADA82q|nof-o0p?-none",
+            "non-follow cycle gets the nof marker -> " + out)
+
+
+def test_fold_exec_no_marker_on_follow():
+    out = ml._fold_exec_onto_scan("SCAN-cry:LADA82q", 0, 0, "", "", "no.neutral", None, follow=True)
+    _assert(out == "SCAN-cry:LADA82q|o0p0-no.neutral" and "nof" not in out,
+            "a normal follow cycle stays clean -- no nof marker -> " + out)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
