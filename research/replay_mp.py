@@ -154,6 +154,10 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     cfg = dict(cfg); cfg["breakout_enabled"] = use_breakout
     max_conc = int(cfg.get("max_concurrent", 3))
     max_corr_base = int(cfg.get("max_correlated_alts", 2))
+    # multi-slot: cascade to fill open slots with the top un-owned qualified survivors
+    # each cycle, instead of the live "one entry per cycle". Robust truthy parse so
+    # both --multislot (bool) and --set multislot=1 (string) work; "0"/""/"false" = off.
+    multislot = str(cfg.get("multislot", "")).strip().lower() not in ("", "0", "false", "no", "none")
     expiry = int(float(cfg.get("limit_expiry_hours", "4")))
     chase = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
     tstop = int(float(cfg.get("time_stop_hours", "4")))
@@ -376,6 +380,55 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         qual = [s for s in scored if not s.skip and s.score >= min_score]
         if not qual:
             continue
+        if multislot:
+            # MULTI-SLOT: cascade the sorted qualified survivors, filling every open
+            # slot this cycle (bounded by max_conc + the correlation cap), instead of
+            # trying only qual[0] and aborting the whole cycle when it enrich-demotes.
+            # This is the exact gap seen live: a top name (LAB) that kept failing
+            # enrichment blocked qualified runner-ups (XAG) from ever taking an open
+            # slot. Each placement re-checks the budget; a candidate that corr-blocks /
+            # enrich-skips / can't size / is too-far is skipped, not the whole cycle.
+            _vlo = float(cfg.get("vol_floor", "0")); _vhi = float(cfg.get("vol_ceiling", "99999"))
+            for cand in qual:
+                cur_owned = [p["sym"] for p in opens] + [q["sym"] for q in pends]
+                if cand.symbol in cur_owned:
+                    continue
+                if len(cur_owned) >= max_conc:
+                    break
+                if corr_budget <= 0:
+                    _mc = max_corr_base
+                    if any(s in ("BTCUSDT", "ETHUSDT") for s in cur_owned):
+                        _mc = min(_mc, 1)
+                    if len(set(cur_owned)) >= _mc:
+                        break
+                cur_held = [(p["sym"], p["side"]) for p in opens] + [(q["sym"], q["side"]) for q in pends]
+                if corr_budget > 0 and cur_held:
+                    if _corr_exposure(kl, cand.symbol, cand.side, cur_held, i, corr_look, hedge_credit) >= corr_budget:
+                        n_corr_block += 1
+                        continue
+                if _enrich(cand, kl, kl4, i, cfg):
+                    continue
+                if _vlo > 0 or _vhi < 99999:
+                    rv = R.realized_vol(kl[cand.symbol][max(0, i - 31):i + 1], int(cfg.get("vol_lookback", 30)))
+                    if rv is not None and (rv < _vlo or rv > _vhi):
+                        continue
+                plan = risk.build_plan(cand.features, cfg, cand.size_factor, side=cand.side, entry_mode=cand.entry_mode)
+                if plan is None or not plan.sizing_ok:
+                    continue
+                n_sig += 1
+                if plan.entry_mode == "breakout":
+                    opens.append({"sym": cand.symbol, "side": cand.side, "mode": "breakout",
+                                  "fill_px": cand.features.last, "sl": plan.sl_price, "tp1": plan.tp1, "tp2": plan.tp2,
+                                  "atr": plan.atr or 0.0, "fill_i": i, "hw": cand.features.last, "trail": plan.sl_price,
+                                  "score": cand.score})
+                else:
+                    cur = cand.features.last
+                    gap = ((plan.entry - cur) / plan.entry) if cand.side == "short" else ((cur - plan.entry) / plan.entry)
+                    if gap > chase:
+                        continue
+                    pends.append({"sym": cand.symbol, "side": cand.side, "entry": plan.entry,
+                                  "placed_i": i, "plan": plan, "score": cand.score})
+            continue
         best = qual[0]
         # v0.8.0: correlation-weighted exposure gate (depends on the candidate).
         # Cheap to compute and placed before enrich so a budget-blocked name does
@@ -491,6 +544,11 @@ def main():
                          "resting limit by >= this many score points cancel-replaces it (0=off)")
     ap.add_argument("--set", default="",
                     help="generic cfg overrides 'key=val,key=val' (e.g. min_score=75,atr_limit_mult=0.4)")
+    ap.add_argument("--multislot", action="store_true",
+                    help="cascade to fill open slots with the top un-owned qualified survivors each "
+                         "cycle (vs the live one-entry-per-cycle); still bounded by max_concurrent + corr")
+    ap.add_argument("--ab-multislot", action="store_true",
+                    help="A/B single-entry-per-cycle (live) vs multi-slot cascade fill")
     ap.add_argument("--ab-preempt", action="store_true",
                     help="A/B first-come-first-served vs a sweep of preemption deltas")
     ap.add_argument("--ab-exitpack", action="store_true",
@@ -540,7 +598,7 @@ def main():
         "er_floor": a.er_floor, "er_lookback": a.er_lookback, "leader": a.leader,
         "breakeven_lock_pct": a.be_lock, "scaleout_frac": a.scaleout,
         "steplock": a.steplock, "tstop_guard": a.tstop_guard,
-        "preempt_delta": a.preempt,
+        "preempt_delta": a.preempt, "multislot": a.multislot,
     }
     # v0.9.13: generic cfg override so ANY knob is sweepable without a dedicated flag
     # (min_score, atr_limit_mult, tp2_pct, trend_weight, enrich_top_n, ...).
