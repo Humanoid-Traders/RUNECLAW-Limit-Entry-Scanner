@@ -484,15 +484,17 @@ def _held_token(mgmt: dict, cfg: dict) -> str:
         flags += "s"
     if str(d.get("trail", "")).startswith("set:"):
         flags += "r"
-    try:
-        cap = int(round(float(cfg.get("time_stop_hours", "12") or "12")))
-    except (TypeError, ValueError):
-        cap = 12
+    # v0.9.18 fix: render the age as ".t<hours>h", NOT ".t<age>/<cap>". The cap
+    # (time_stop_hours) is a fixed config constant, and appending it pushed a
+    # flags-bearing held token + a full 3-universe digest to 64 chars, so the fold's
+    # 63-char clip sheared the last digit of "/12" -> a misleading "/1" that read as
+    # "time-stop at 1h, overdue" (the live LAB runner false alarm). Elapsed hours is
+    # the actionable number and can never mis-clip; the 12h ceiling is documented.
     tok = "hld.%s%+d%s" % (sym, int(round(d["move_pct"])), flags)
     if d.get("ts_ok") and d.get("age_h") is not None:
-        tok += ".t%d/%d" % (int(d["age_h"]), cap)
+        tok += ".t%dh" % int(d["age_h"])
     else:
-        tok += ".t?/%d" % cap
+        tok += ".t?h"     # open-time unreadable -> the time-stop is blind on this position
     return tok[:32]
 
 
