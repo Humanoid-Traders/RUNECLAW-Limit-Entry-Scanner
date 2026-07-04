@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.19"
+version: "0.9.20"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -94,6 +94,20 @@ strategy_config:
   # flat-or-shallower and PF up in every window, stacks cleanly with breakout_trend_min
   # 0.7 (distinct mechanism). Equities keep their tighter 2.5 per-universe override.
   max_vwap_ext_pct: "5.0"
+  # v0.9.20 -- vol-regime gate (structural-sweep candidate). Stand aside when the
+  # chosen best's annualized realized vol (std of log returns over vol_lookback 1h
+  # bars x sqrt(8760) x 100) is outside [vol_floor, vol_ceiling]. 0 = that side OFF.
+  # ARMED at vol_ceiling 200: refuse the chaos-vol names (~3x these symbols' median
+  # vol) that drive the deepest drawdowns -- in the 21/35/42d replay windows this
+  # capped maxDD at -7.6% (halved in the 35/42d windows) with net up. Threshold is a
+  # plateau (150-200 give the same benefit; >=250 is inert on current data), so 200
+  # is the conservative interior choice. FAIL-OPEN and cost-free when both are 0.
+  # TRIAL: the +net magnitude is not out-of-sample-verifiable (~42d of data); the
+  # deliverable is the drawdown cap -- the gate only ever REMOVES trades, never adds
+  # risk. Watch the vol_regime_<n> stand-downs on the compact line before trusting it.
+  vol_floor: "0"
+  vol_ceiling: "200"
+  vol_lookback: 30
   tp1_pct: "5.0"
   # v0.6.3 — trailing-stop exit (validated in research/replay_mp.py at 3-slot
   # concurrency). The manager ratchets the SL to price -/+ trail_atr_mult*ATR
@@ -361,6 +375,11 @@ user_config_schema:
     default: "5.0"     # v0.9.19: kept in sync with strategy_config (see the runtime value above)
     pattern: "^[0-9]+(\\.[0-9]+)?$"
     label: "Max distance from VWAP to enter (%; beyond this a strong-trend crypto name is a breakout, not a pullback)"
+  vol_ceiling:
+    type: string
+    default: "200"     # v0.9.20: synced with strategy_config; "0" disables the gate
+    pattern: "^[0-9]+(\\.[0-9]+)?$"
+    label: "Volatility ceiling (annualized realized vol %; stand aside on chaos-vol names above this; 0 = off)"
   breakout_enabled:
     type: boolean
     default: true
