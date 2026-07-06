@@ -685,12 +685,38 @@ def manage_open_state(cfg: dict) -> dict:
             # breaker blind -> -b?). Before, both collapsed to None, so a fresh or quiet
             # deployment showed a perpetual, misleading -b?. Blind-detection preserved:
             # only a real read failure (fills_rows is None) leaves realized None.
+            # v0.9.25: classify HOW the breaker sees (or fails to see) the window.
+            # Two fixes over v0.9.18: (1) REAL BUG -- fills present but all OLDER
+            # than the window returned realized None (blind -b?) when the truth is
+            # "read fine, quiet window" (realized 0, full headroom): a chronic
+            # false-blind whenever the last fills aged past 24h, which matches the
+            # live feed NEVER once showing a -b<number> on any version. (2) when
+            # genuinely blind, name the failing STAGE so the compact token
+            # (-b?r/-b?t/-b?k) diagnoses itself from the feed: r = the fills read
+            # failed outright, t = rows present but no timestamp parsed on any row,
+            # k = in-window fills present but no recognised profit field.
+            blind = ""
             if fills_rows is None:
-                realized = None
+                realized, blind = None, "r"
             elif not fills_rows:
                 realized = 0.0
             else:
-                realized = _realized_pnl(fills_rows, lb_window)
+                _inw = _fills_in_window(fills_rows, lb_window)
+                if _inw:
+                    _profits = [w["profit"] for w in _inw if w["profit"] is not None]
+                    if _profits:
+                        realized = sum(_profits)
+                    else:
+                        realized, blind = None, "k"
+                else:
+                    _ts_any = any(_coerce_ms(_find_open_time_value(_to_mapping(r) or {})) is not None
+                                  for r in fills_rows)
+                    if _ts_any:
+                        realized = 0.0        # genuinely quiet window -> full headroom
+                    else:
+                        realized, blind = None, "t"
+            if blind:
+                status["loss_breaker_blind"] = blind
             status["realized_window_pnl"] = None if realized is None else round(realized, 4)
             # v0.9.7 observability: emit the breaker's own arithmetic so the
             # operator never re-derives it (the recurring equity*frac misread).
