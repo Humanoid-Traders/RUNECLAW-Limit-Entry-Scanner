@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.23"
+version: "0.9.24"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -172,7 +172,11 @@ strategy_config:
   # live trim is the mapping proof (watch the scale_out action / so: diag; a
   # reject or a fail-closed no-op is surfaced, never retried blind). Positions
   # are already small ($60 margin/slot), which IS the small-size condition.
-  scaleout_frac: "0.5"
+  # v0.9.24: 0.5 -> 0.35 (signal-audit sweep, 9/9 with the breaker recalibration
+  # jointly: banking a third instead of half at tp1 leaves more runner on the
+  # trail/ladder; +2.7..+4.2pt net on top of the breaker in every window, tail
+  # unchanged). Validated as the COMBO -- do not retune one without the other.
+  scaleout_frac: "0.35"
   scaleout_trigger_pct: "3.5"
   sl_min_btc_eth_pct: "1.5"
   sl_min_sol_bnb_pct: "1.2"
@@ -197,7 +201,18 @@ strategy_config:
   # -$33.21, two correlated overnight crypto shorts both stopped) was the
   # exact pattern this breaker targets. Enabling now -- validated harmless in
   # healthy sessions, tail-cutting in weak ones.
-  loss_breaker_frac: "0.08"
+  # v0.9.24 RECALIBRATION 0.08 -> 0.018: the signal-audit sweep validated the
+  # harness's loss_pause=3 (stand aside after -3 return-units realized in 24 bars)
+  # 9/9 -- net +7..+12pt AND maxDD -19.8 -> -15.4 AND PF up in EVERY window
+  # (21/35/42d, live 28-symbol set), win% up on FEWER trades: it cuts the losing
+  # CLUSTERS (the live July-5 MSTR->ETH-short back-to-back stop pattern). Unit
+  # mapping: 1 ret-unit ~= notional/100 ~= $6 at the $600 full-size slot -> -3
+  # ret-units ~= -$18 realized -> frac = 18 / (margin 100 x lev 10) = 0.018. The
+  # mapping is approximate (scale-out trims and 0.5-size regimes vary notional per
+  # ret-unit) but the direction is unambiguous: the old 0.08 (-$80) threshold was
+  # ~4.4x looser than the validated stand-down point and essentially never fired.
+  # Feed note: the -b<headroom> token's arithmetic shrinks accordingly (~18 max).
+  loss_breaker_frac: "0.018"
   loss_breaker_window_hours: "24"
   # v0.9.1 -- Phase-4 live trade journal. Each cycle, emit recent closed-trade
   # realized records (from exchange fills -- the same read the loss breaker uses, so
@@ -420,10 +435,10 @@ user_config_schema:
     label: "Margin mode for new opens (crossed = proven default; isolated = trial-gated, see DESIGN_v0.6.4)"
   loss_breaker_frac:
     type: number
-    default: 0.08
+    default: 0.018
     min: 0
     max: 0.5
-    label: "Realized-loss breaker: pause new entries after trailing-window realized loss reaches this x one slot's notional (0 = off; 0.08 = armed default, see DESIGN_v0.8.0)"
+    label: "Realized-loss breaker: pause new entries after trailing-window realized loss reaches this x one slot's notional (0 = off; 0.018 = v0.9.24 validated default ~= -3 return-units/24h)"
   loss_breaker_window_hours:
     type: number
     default: 24
@@ -459,10 +474,10 @@ user_config_schema:
     label: "Step-lock ladder 'arm:lock,arm:lock' in %% of entry -- the protective floor climbs to the highest armed rung as the move extends (empty = off; '2:1.5,4:3,6:4.5' validated)"
   scaleout_frac:
     type: number
-    default: 0.5
+    default: 0.35
     min: 0
     max: 0.9
-    label: "Scale-out: fraction of the position closed at market once the move passes scaleout_trigger_pct; remainder rides the trail + ladder (0 = off; 0.5 validated -- trial at small size first, new order surface)"
+    label: "Scale-out: fraction of the position closed at market once the move passes scaleout_trigger_pct; remainder rides the trail + ladder (0 = off; 0.35 = v0.9.24 validated jointly with the recalibrated loss breaker)"
   scaleout_trigger_pct:
     type: number
     default: 3.5

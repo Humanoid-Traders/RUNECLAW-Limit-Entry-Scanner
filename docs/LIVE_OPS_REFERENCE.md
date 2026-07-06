@@ -214,9 +214,11 @@ digit.** They use the same full-precision `move_pct` the display digit is
 rounded from, but the digit itself gates nothing.
 
 ### Scale-out
-`scaleout_frac` (0.5) of the position closes at market once move ≥
-`scaleout_trigger_pct` (3.5%); the remainder keeps riding the trail/ladder.
-Runs *before* the trail each cycle so the trail then covers the trimmed size.
+`scaleout_frac` (**0.35** since v0.9.24; was 0.5) of the position closes at
+market once move ≥ `scaleout_trigger_pct` (3.5%); the remainder keeps riding
+the trail/ladder. Runs *before* the trail each cycle so the trail then covers
+the trimmed size. The 0.35 was validated **jointly** with the v0.9.24
+loss-breaker recalibration (9/9 windows) — retune them together, not alone.
 
 ### Margin mode
 `margin_mode: "crossed"` is the **intentional, current default** — not a
@@ -271,12 +273,12 @@ margin   = notional / leverage                              # then capped by mar
 | `breakeven_pct` / `_trigger_usdt` | 2.0% / $20 | :134, :229 |
 | `breakeven_lock_pct` | 1.5% | :151 |
 | `steplock` | 2:1.5, 4:3, 6:4.5 | :161 |
-| `scaleout_frac` / `_trigger_pct` | 0.5 / 3.5% | :175-176 |
+| `scaleout_frac` / `_trigger_pct` | **0.35** (v0.9.24) / 3.5% | scaleout block |
 | `sl_min_btc_eth / sol_bnb / alt` | 1.5% / 1.2% / 2.5% | :177-179 |
 | `allow_short` | true | :183 |
 | `max_concurrent` | 3 (hard-enforced) | :184 |
 | `max_correlated_alts` | 2 | :185 |
-| `loss_breaker_frac` / window | 0.08 / 24h | :200-201 |
+| `loss_breaker_frac` / window | **0.018** (v0.9.24, ≈ -$18/24h; was 0.08) / 24h | breaker block |
 | `event_blackout_hours` | 2 (equities only) | :217-224 |
 | `time_stop_hours` | **12** (unconditional; breakout + unknown-mode cap) | :225 |
 | `pullback_time_stop_hours` | **4** (unconditional; v0.9.22 per-mode cap) | v0.9.22 block |
