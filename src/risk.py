@@ -108,20 +108,39 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
             tp2 = entry * (1.0 + tp2_pct)
             breakeven_price = entry * (1.0 + be_pct)
     elif side == "short":
+        # v0.9.28 candidate -- pullback_stop_buffer_pct: pad the structural stop
+        # BEYOND the 24h extreme instead of sitting exactly ON it. The raw pullback
+        # stop is the most crowded, most-hunted price on the chart (live 2026-07-06:
+        # ETH short SL $1804.00, swing top $1804.37 -- tagged by 37 cents, then a
+        # $17 reversal in the trade's favour). Breakout stops have carried exactly
+        # this pad since v0.5.0 (breakout_level_buffer_pct); pullbacks never did.
+        # Risk-neutral by construction: sizing solves backward from the wider stop,
+        # so max_loss_usdt is unchanged -- the cost is a slightly smaller position,
+        # not a bigger loss. 0 (default) = exact pre-v0.9.28 behaviour.
+        try:
+            pb_buf = float(cfg.get("pullback_stop_buffer_pct", "0") or "0") / 100.0
+        except (TypeError, ValueError):
+            pb_buf = 0.0
         entry = vwap + atr_mult * atr
         if entry <= 0:
             return None
-        raw_sl_pct = (high - entry) / entry if high > entry else 0.0
+        struct = high * (1.0 + pb_buf)
+        raw_sl_pct = (struct - entry) / entry if struct > entry else 0.0
         sl_pct = max(raw_sl_pct, sl_min)
         sl_price = entry * (1.0 + sl_pct)
         tp1 = entry * (1.0 - tp1_pct)
         tp2 = entry * (1.0 - tp2_pct)
         breakeven_price = entry * (1.0 - be_pct)
     else:
+        try:
+            pb_buf = float(cfg.get("pullback_stop_buffer_pct", "0") or "0") / 100.0
+        except (TypeError, ValueError):
+            pb_buf = 0.0
         entry = vwap - atr_mult * atr
         if entry <= 0:
             return None
-        raw_sl_pct = (entry - low) / entry if entry > low else 0.0
+        struct = low * (1.0 - pb_buf)
+        raw_sl_pct = (entry - struct) / entry if entry > struct else 0.0
         sl_pct = max(raw_sl_pct, sl_min)
         sl_price = entry * (1.0 - sl_pct)
         tp1 = entry * (1.0 + tp1_pct)

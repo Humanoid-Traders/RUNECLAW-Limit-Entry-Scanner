@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.27"
+version: "0.9.28"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -256,6 +256,15 @@ strategy_config:
   # there), so the 4h cap is unvalidated-but-low-stakes on that universe.
   pullback_time_stop_hours: "4"
   pullback_tp2_pct: "22"
+  # v0.9.28 CANDIDATE (default 0 = bit-exact legacy; arming awaits the sweep).
+  # Pad the pullback structural stop BEYOND the 24h extreme instead of sitting
+  # exactly ON it -- the most crowded, most-hunted price on the chart (live
+  # 2026-07-06: ETH short SL $1804.00, swing top $1804.37 -- tagged by 37 cents,
+  # then a $17 reversal in the trade's favour). Breakouts have carried exactly
+  # this pad since v0.5.0 (breakout_level_buffer_pct 0.2); pullbacks never did.
+  # Risk-NEUTRAL: sizing solves backward from the wider stop, so max_loss_usdt
+  # is unchanged -- the cost is a smaller position, not a bigger loss.
+  pullback_stop_buffer_pct: "0"
   breakout_time_stop_hours: "0"
   breakout_tp2_pct: "0"
   limit_expiry_hours: "4"
