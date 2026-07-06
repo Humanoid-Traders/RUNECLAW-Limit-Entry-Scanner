@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.31"
+version: "0.9.32"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -255,12 +255,23 @@ strategy_config:
   # flipped the whole universe long<->short between cycles -- the live L<->s
   # whipsaw churning limit placements). A dead-zone withdraws a vote inside its
   # noise band -> weak tape yields reduced-size/none regimes instead of
-  # full-size flips. Stateless; 0 = bit-exact legacy edges. ARMING AWAITS the
-  # 21/35/42d sweep. regime_taker_vote gates the third vote entirely: the
-  # replay harness has never simulated taker (every validation is of the 2-vote
-  # gate), so "0" = exact live/replay parity; "1" (default) = current live
-  # behaviour. All four card-tunable.
-  regime_chg_deadzone_pct: "0"
+  # full-size flips. Stateless; 0 = bit-exact legacy edges.
+  # SWEEP VERDICTS (21/35/42d, live 28-symbol baseline):
+  #   chg 0.3  -- ARMED: wins 9/9 cells (net +7.7/+5.0/+4.8pt, PF 1.58->2.00 /
+  #               2.78->2.92 / 2.39->2.49, maxDD IDENTICAL -19.8 everywhere).
+  #               A +/-0.3% day-change genuinely carries no direction.
+  #   vwap 0.1 -- KILLED: net -6..-14pt AND maxDD -19.8 -> -22.5 in EVERY
+  #               window. The VWAP razor edge is load-bearing (it is the
+  #               system's entry anchor) -- do not soften it. Keep 0.
+  #   both     -- inherits the vwap poison; killed with it.
+  # (Equities min_score 80/85 swept in the same run: KILLED -- net collapses
+  #  22.5->8.8 / 31.9->8.8; the small-universe score inflation is real but
+  #  harmless, the 70-floor trades are profitable. Stays 70.)
+  # regime_taker_vote gates the third vote entirely: the replay harness has
+  # never simulated taker (every validation is of the 2-vote gate), so "0" =
+  # exact live/replay parity; "1" (default) = current live behaviour --
+  # unswept either way (no historical taker data), so the default stays put.
+  regime_chg_deadzone_pct: "0.3"
   regime_vwap_deadzone_pct: "0"
   regime_taker_deadzone: "0"
   regime_taker_vote: "1"
