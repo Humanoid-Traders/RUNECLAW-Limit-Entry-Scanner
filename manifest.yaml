@@ -291,8 +291,19 @@ strategy_config:
   # only. Built for ABLATION ("does this signal earn its weight?" -- set one to
   # 0), not for grid-tuning, which is an overfit machine. Hard disqualifiers
   # (walls, thin volume, no VWAP) are not weights and hold at any setting.
-  # Ablation verdicts for the two audit-flagged dims (volume: majors bias on
-  # top of the liquidity floor; orderbook: top-of-book noise) pending sweep.
+  # ABLATION VERDICTS (2026-07-06, 21/35/42d joint-live baseline):
+  #   volume 15 -- DEFENDED DECISIVELY. Zeroing it TRIPLES trades (67->101 at
+  #     42d: the small caps it suppresses flood in), win% -10pts, net -3..-18pt,
+  #     PF HALVES in every window. The "majors bias" is a quality filter.
+  #   orderbook 20 -- DEFENDED ON NET, mechanism understood. Zeroed at the
+  #     fixed 70-floor it collapses the system (max score 80 -> nothing
+  #     qualifies; PF 0.35-0.76) -- a THRESHOLD artifact. De-confounded with a
+  #     proportional floor (56): recovers to +76.3/PF 3.76/DD -10.6 vs baseline
+  #     +86.8/3.47/-15.4 -- identical per-trade avg (+1.44 vs +1.42). So the
+  #     dim's +10.5pt of net comes from PARTICIPATION scale, not per-trade
+  #     prediction; a defensive lower-net/better-tail profile exists at
+  #     (book=0, floor 56) but net rules -> keep legacy.
+  # With these two defended, EVERY pass-1 input has now been questioned once.
   score_w_momentum: "25"
   score_w_vwap: "20"
   score_w_range: "20"
