@@ -122,6 +122,23 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
     partial_ratio = float(cfg.get("bidask_partial_ratio", "1.2"))
     wall_ratio = float(cfg.get("bidask_wall_ratio", "10.0"))
     max_ext_pct = float(cfg.get("max_vwap_ext_pct", "4.0")) / 100.0
+    # v0.9.33 -- dimension weights as config (signal-audit finding #5: the
+    # 25/20/20/20/15 split is v0.1.0 vintage, never questioned). Each dim still
+    # computes on its original internal scale; the weight rescales its
+    # CONTRIBUTION, so the defaults are bit-exact legacy and w=0 is a clean
+    # ABLATION ("does this signal earn its weight?") -- the intended use. The
+    # hard DISQUALIFIERS tied to these signals (ask/bid wall skip, thin-volume
+    # skip, no-vwap skip) are NOT weights and remain in force at any weight.
+    def _w(key: str, base: float) -> float:
+        try:
+            return max(float(cfg.get(key, str(base)) or str(base)), 0.0) / base
+        except (TypeError, ValueError):
+            return 1.0
+    w_mom = _w("score_w_momentum", 25.0)
+    w_vwap = _w("score_w_vwap", 20.0)
+    w_range = _w("score_w_range", 20.0)
+    w_book = _w("score_w_orderbook", 20.0)
+    w_volm = _w("score_w_volume", 15.0)
 
     results = []
     for f in feats_list:
@@ -247,7 +264,8 @@ def score_universe(feats_list: list, btc: SymbolFeatures, cfg: dict, direction: 
         dims["volume"] = round(volume_score, 2)
         dims["quote_volume"] = quote_volume
 
-        total = momentum + vwap_score + range_score + orderbook_score + volume_score
+        total = (momentum * w_mom + vwap_score * w_vwap + range_score * w_range
+                 + orderbook_score * w_book + volume_score * w_volm)
         dims["total"] = round(total, 2)
         results.append(Scored(f.symbol, side, total, dims, skip, reason, f,
                               entry_mode=entry_mode))

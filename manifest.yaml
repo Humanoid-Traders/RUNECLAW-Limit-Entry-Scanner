@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.32"
+version: "0.9.33"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -86,9 +86,15 @@ strategy_config:
   # to "crossed" restores the proven path instantly.
   margin_mode: "isolated"
   max_scan_symbols: 28
+  # min_score DEFENDED both ways (2026-07-06 sweep, 35d live baseline): 65 loses
+  # 11pt net (slot/correlation dynamics -- more qualifiers, fewer completed
+  # trades) and 75 is catastrophic (PF 0.58; the 70-75 band holds the profitable
+  # marginal trades). The v0.1.0 value is genuinely optimal.
   min_score: 70
   conditional_score: 50
   min_volume_usdt: "10000000"
+  # atr_limit_mult DEFENDED both ways (2026-07-06 sweep, 35d): 0.2 and 0.5 both
+  # fail to beat 0.3 on net+PF.
   atr_limit_mult: "0.3"
   # v0.9.19 -- widened 4.0 -> 5.0 by the structural sweep (OOS-verified across 21/35/42d
   # breakout windows). The overextension cap doubles as the breakout-routing trigger:
@@ -257,9 +263,14 @@ strategy_config:
   # noise band -> weak tape yields reduced-size/none regimes instead of
   # full-size flips. Stateless; 0 = bit-exact legacy edges.
   # SWEEP VERDICTS (21/35/42d, live 28-symbol baseline):
-  #   chg 0.3  -- ARMED: wins 9/9 cells (net +7.7/+5.0/+4.8pt, PF 1.58->2.00 /
-  #               2.78->2.92 / 2.39->2.49, maxDD IDENTICAL -19.8 everywhere).
+  #   chg 0.3  -- ARMED: wins 9/9 cells solo (net +7.7/+5.0/+4.8pt, PF 1.58->2.00
+  #               / 2.78->2.92 / 2.39->2.49, maxDD IDENTICAL -19.8 everywhere).
   #               A +/-0.3% day-change genuinely carries no direction.
+  #               INTERACTION NOTE (jointly with the live loss-pause modelled as
+  #               loss_pause_pct=3): the edge SHRINKS to +7.7/+2.1/-1.2pt --
+  #               both mechanisms cut chop losses, so they partially overlap.
+  #               Tail never worse, PF up-or-equal in every window; kept armed
+  #               with the shrinkage on record.
   #   vwap 0.1 -- KILLED: net -6..-14pt AND maxDD -19.8 -> -22.5 in EVERY
   #               window. The VWAP razor edge is load-bearing (it is the
   #               system's entry anchor) -- do not soften it. Keep 0.
@@ -275,6 +286,29 @@ strategy_config:
   regime_vwap_deadzone_pct: "0"
   regime_taker_deadzone: "0"
   regime_taker_vote: "1"
+  # v0.9.33 -- pass-1 score dimension weights (signal-audit finding #5). Values
+  # = the v0.1.0 legacy split, bit-exact; each rescales its dim's CONTRIBUTION
+  # only. Built for ABLATION ("does this signal earn its weight?" -- set one to
+  # 0), not for grid-tuning, which is an overfit machine. Hard disqualifiers
+  # (walls, thin volume, no VWAP) are not weights and hold at any setting.
+  # ABLATION VERDICTS (2026-07-06, 21/35/42d joint-live baseline):
+  #   volume 15 -- DEFENDED DECISIVELY. Zeroing it TRIPLES trades (67->101 at
+  #     42d: the small caps it suppresses flood in), win% -10pts, net -3..-18pt,
+  #     PF HALVES in every window. The "majors bias" is a quality filter.
+  #   orderbook 20 -- DEFENDED ON NET, mechanism understood. Zeroed at the
+  #     fixed 70-floor it collapses the system (max score 80 -> nothing
+  #     qualifies; PF 0.35-0.76) -- a THRESHOLD artifact. De-confounded with a
+  #     proportional floor (56): recovers to +76.3/PF 3.76/DD -10.6 vs baseline
+  #     +86.8/3.47/-15.4 -- identical per-trade avg (+1.44 vs +1.42). So the
+  #     dim's +10.5pt of net comes from PARTICIPATION scale, not per-trade
+  #     prediction; a defensive lower-net/better-tail profile exists at
+  #     (book=0, floor 56) but net rules -> keep legacy.
+  # With these two defended, EVERY pass-1 input has now been questioned once.
+  score_w_momentum: "25"
+  score_w_vwap: "20"
+  score_w_range: "20"
+  score_w_orderbook: "20"
+  score_w_volume: "15"
   time_stop_hours: "12"
   # v0.9.22 -- trade-type exit packs (per-mode keys; 0 = inherit the global rule,
   # the exact pre-v0.9.22 behaviour). Phase-1/2 replay on the LIVE 28-symbol set:
@@ -307,6 +341,12 @@ strategy_config:
   pullback_stop_buffer_pct: "0"
   breakout_time_stop_hours: "0"
   breakout_tp2_pct: "0"
+  # limit_expiry_hours DEFENDED (2026-07-06, 35d): 6h loses 15pt net -- stale
+  # limits that fill late fill badly. limit_chase_pct DEFENDED (21/35/42d): 4.0
+  # screened +8.9pt at 35/42d but REGRESSED -4.5pt/PF-down at 21d; the 3.5
+  # interpolation was mixed the same way (21d -7.3). The recent window
+  # consistently punishes wider chasing -> keep 3.0; the live no.far blocks are
+  # the filter working, not a defect.
   limit_expiry_hours: "4"
   limit_chase_pct: "3.0"
   size_scope_mult: "1.5"

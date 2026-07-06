@@ -1,6 +1,6 @@
 # RUNECLAW Live Operations Reference
 
-Current as of **v0.9.21** (manifest.yaml). This is a living reference for
+Current as of **v0.9.33** (manifest.yaml). This is a living reference for
 reading live SITREPs and the compact SCAN line without re-deriving mechanics
 from source each time. **The repo is always the source of truth** — if this
 doc and `manifest.yaml` / `src/*.py` ever disagree, trust the code and flag
@@ -120,7 +120,16 @@ visible without that cycle's live funding/trend data.
 ## 2. Entry pipeline
 
 1. Each universe's regime leader (BTC / QQQ / XAU) sets that universe's
-   direction: `long`, `short`, or `neutral` (`scoring.regime`).
+   direction: `long`, `short`, or `neutral` (`scoring.regime`). Three votes —
+   day-change sign, price-vs-VWAP, taker flow (crypto only) — 2+ votes gates a
+   direction at full size, exactly 1 at half size. **Since v0.9.32 the
+   day-change vote has a ±0.3% dead-zone** (`regime_chg_deadzone_pct`): a
+   leader inside that band casts no direction vote, so hair-trigger tape
+   yields reduced-size/none regimes instead of full-size L↔s flips (the
+   whipsaw fix; swept 9/9). The VWAP vote deliberately keeps its razor edge —
+   softening it was swept and KILLED (net −6..−14pt, worse tail). The taker
+   vote is live-only (the harness has never simulated it); `regime_taker_vote:
+   "0"` is the documented card toggle for exact live/replay parity.
 2. Pass 1 (cheap ticker scan): every non-leader symbol in the universe is
    scored; `qualified` = score ≥ `min_score` and not skipped.
 3. **All universes' `qualified` candidates are pooled and sorted globally by
@@ -149,6 +158,24 @@ visible without that cycle's live funding/trend data.
    only) suppress **new** entries within ±`event_blackout_hours` (2) of a
    high-importance US calendar event. Existing positions/limits are
    untouched. Fail-open if the calendar is unreadable.
+10. **Earnings blackout (v0.9.30)**: the macro calendar doesn't know MSTR
+    reports tonight. Universes with `earnings_blackout: true` (equities)
+    withdraw a **symbol's own candidacy** around its report date (the report's
+    UTC day ± `earnings_blackout_hours` (4) — day-granular because the
+    calendar carries a date, not a timestamp). Stood-down symbols appear in
+    `metrics.earnings_blackout_symbols`; the digest still shows their scores.
+    Entries only; fail-open at every layer.
+11. **Owned-symbol fall-through (v0.9.23)**: symbols with an open position or
+    resting limit are withdrawn from pooled candidacy *before* step 5, so a
+    blocked best falls through to the runner-up instead of wasting the cycle
+    (live/replay parity — the harness always worked this way). Feed
+    signature: `entry_already_pending` is rare; its appearance means the
+    execution-level race backstop fired.
+12. Score dimension weights (v0.9.33): the five pass-1 dims (momentum 25 /
+    VWAP 20 / range 20 / order-book 20 / volume 15) are config keys
+    (`score_w_*`) defaulting to the legacy split — built for **ablation**
+    ("does this signal earn its weight?"), not tuning. Hard disqualifiers
+    (walls, thin volume, no VWAP) are not weights and hold at any setting.
 
 ---
 
@@ -261,7 +288,7 @@ margin   = notional / leverage                              # then capped by mar
 
 ---
 
-## 5. Current live parameter reference (v0.9.21)
+## 5. Current live parameter reference (v0.9.33)
 
 | Parameter | Value | manifest.yaml |
 |---|---|---|
@@ -285,6 +312,10 @@ margin   = notional / leverage                              # then capped by mar
 | `max_correlated_alts` | 2 | :185 |
 | `loss_breaker_frac` / window | **0.018** (v0.9.24, ≈ -$18/24h; was 0.08) / 24h | breaker block |
 | `event_blackout_hours` | 2 (equities only) | :217-224 |
+| `earnings_blackout_hours` | **4** (equities, per-symbol, v0.9.30) | earnings block |
+| `regime_chg_deadzone_pct` | **0.3** (v0.9.32, swept 9/9; vwap dz KILLED) | regime block |
+| `regime_taker_vote` | 1 (parity toggle; "0" = replay-validated 2-vote gate) | regime block |
+| `score_w_*` (5 dims) | legacy 25/20/20/20/15 (ablation keys, v0.9.33) | scoring block |
 | `time_stop_hours` | **12** (unconditional; breakout + unknown-mode cap) | :225 |
 | `pullback_time_stop_hours` | **4** (unconditional; v0.9.22 per-mode cap) | v0.9.22 block |
 | `pullback_tp2_pct` | 22 (mode marker; replay-proven inert) | v0.9.22 block |
