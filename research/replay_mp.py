@@ -141,6 +141,26 @@ def _enrich(best, kl, kl4, i, cfg):
     return skip
 
 
+def _session_open_ts(ts, spec):
+    """True iff bar-timestamp `ts` (epoch s or ms) is a weekday inside the UTC
+    "HH:MM-HH:MM" window `spec`. Mirrors main_live._session_open so a sweep here
+    validates the exact live gate. Fail-OPEN on a malformed spec/timestamp -- a
+    typo must never silently zero a universe's entries."""
+    from datetime import datetime, timezone
+    try:
+        t = float(ts)
+        if t > 1e12:                       # ms-epoch klines -> seconds
+            t /= 1000.0
+        dt = datetime.fromtimestamp(t, tz=timezone.utc)
+        if dt.weekday() >= 5:              # Sat/Sun: underlying cash market closed
+            return False
+        a, b = spec.split("-", 1)
+        h1, m1 = (int(x) for x in a.split(":")); h2, m2 = (int(x) for x in b.split(":"))
+        return (h1 * 60 + m1) <= (dt.hour * 60 + dt.minute) < (h2 * 60 + m2)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return True
+
+
 def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     leader = cfg.get("leader", "BTCUSDT")   # v0.9.x: configurable per-universe leader
     kl, kl4 = data if data is not None else R.fetch_all(symbols, days)
@@ -161,6 +181,18 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     expiry = int(float(cfg.get("limit_expiry_hours", "4")))
     chase = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
     tstop = int(float(cfg.get("time_stop_hours", "4")))
+    # v0.9.22 trade-type sweep: per-entry-mode hold caps. 0/absent = inherit the
+    # global time_stop_hours (exactly the pre-v0.9.22 behaviour), so baselines are
+    # unchanged unless a sweep arms them via --set breakout_time_stop_hours=6 etc.
+    tstop_bk = int(float(cfg.get("breakout_time_stop_hours", "0") or "0")) or tstop
+    tstop_pb = int(float(cfg.get("pullback_time_stop_hours", "0") or "0")) or tstop
+    # v0.9.22 trade-type sweep: (a) pullback entries can be disabled outright for a
+    # universe run (Phase-1 finding: equities pullbacks are net-NEGATIVE at every
+    # hold cap while equity breakouts pay); (b) an underlying-session gate
+    # ("HH:MM-HH:MM" UTC + weekends closed) suppresses NEW entries when the RWA
+    # cash market is shut (no price discovery -- the weekend-MSTR-grind class).
+    pb_on = str(cfg.get("pullback_enabled", "1")).strip().lower() not in ("0", "false", "no")
+    sess_spec = str(cfg.get("session_hours_utc", "") or "")
     min_score = float(cfg.get("min_score", 70))
     exit_mode = str(cfg.get("exit_mode", "fixed"))
     tmult = float(cfg.get("trail_atr_mult", "1.0"))
@@ -300,7 +332,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                 else:
                     if hi >= p["sl"]: ex = (p["sl"], "sl")
                     elif lo <= p["tp1"]: ex = (p["tp1"], "tp1")
-            if ex is None and (i - p["fill_i"]) >= tstop:
+            if ex is None and (i - p["fill_i"]) >= (tstop_bk if p["mode"] == "breakout" else tstop_pb):
                 # profit guard: an in-profit position keeps riding the trail/locks
                 # instead of being clock-closed (candidate C; guard off = legacy).
                 in_profit = ((c - p["fill_px"]) / p["fill_px"] if long
@@ -332,6 +364,11 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         pends = keepp
 
         # 3) consider a new entry under the slot + correlation caps
+        # v0.9.22 session gate: management above always runs; only NEW entries are
+        # suppressed while the underlying's cash session is closed (resting limits
+        # still age into the 4h expiry, so at most 4h leaks into a closed session).
+        if sess_spec and not _session_open_ts(kl[leader][i][0], sess_spec):
+            continue
         held = [(p["sym"], p["side"]) for p in opens] + [(q["sym"], q["side"]) for q in pends]
         owned = [h[0] for h in held]
         # v0.9.9: compute whether the budget is full, but DEFER the block -- with
@@ -378,6 +415,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         feats = [R.recon_features(s, kl[s][i - 24:i + 1]) for s in syms if s not in owned]
         scored = scoring.score_universe(feats, lead, cfg, reg.direction, allow_breakout=use_breakout)
         qual = [s for s in scored if not s.skip and s.score >= min_score]
+        if not pb_on:  # v0.9.22: universe runs pullback-off -> breakout entries only
+            qual = [s for s in qual if s.entry_mode == "breakout"]
         if not qual:
             continue
         if multislot:
