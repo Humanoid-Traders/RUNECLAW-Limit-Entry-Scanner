@@ -192,6 +192,31 @@ def test_session_gate():
     _assert(_sess("13:30-20:00", "2026-07-06T20:00") is False, "window end exclusive")
     _assert(_sess("garbage", "2026-07-04T15:00") is True, "malformed spec -> fail-OPEN")
 
+# ---- v0.9.28 candidate: pullback structural stop buffer ----
+
+def test_pullback_stop_buffer():
+    """The raw pullback stop sits ON the 24h extreme -- the most hunted price on
+    the chart (live 2026-07-06: SL $1804.00, swing top $1804.37, tagged by 37
+    cents then a $17 favourable reversal). The buffer pads the stop BEYOND the
+    level; sizing solves backward from the wider stop so dollar risk is
+    UNCHANGED. 0/absent = bit-exact legacy."""
+    f = SF("ETHUSDT", True, last=1770.0, vwap=1769.0, high=1804.0, low=1720.0,
+           change_pct=-1.0, quote_volume=1e9)
+    cfg = {"tp2_pct": "20", "sl_min_btc_eth_pct": "1.0", "max_loss_usdt": "15",
+           "leverage": 10, "margin_budget": "1000", "atr_limit_mult": "0.3"}
+    p0 = risk.build_plan(f, dict(cfg), 1.0, side="short")
+    cfg["pullback_stop_buffer_pct"] = "0.4"
+    p4 = risk.build_plan(f, dict(cfg), 1.0, side="short")
+    _assert(p4.sl_price > p0.sl_price, "buffer widens the short stop beyond the 24h high")
+    _assert(p4.notional_usdt < p0.notional_usdt, "wider stop -> smaller size (backward sizing)")
+    _assert(abs(p0.sl_pct * p0.notional_usdt - 15.0) < 1e-6
+            and abs(p4.sl_pct * p4.notional_usdt - 15.0) < 1e-6,
+            "dollar risk identical at $15 with and without the buffer")
+    cfg["pullback_stop_buffer_pct"] = "0"
+    pz = risk.build_plan(f, dict(cfg), 1.0, side="short")
+    _assert(abs(pz.sl_price - p0.sl_price) < 1e-9, "buffer 0 -> bit-exact legacy stop")
+
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
