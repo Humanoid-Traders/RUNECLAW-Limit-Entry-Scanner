@@ -256,14 +256,16 @@ strategy_config:
   # there), so the 4h cap is unvalidated-but-low-stakes on that universe.
   pullback_time_stop_hours: "4"
   pullback_tp2_pct: "22"
-  # v0.9.28 CANDIDATE (default 0 = bit-exact legacy; arming awaits the sweep).
-  # Pad the pullback structural stop BEYOND the 24h extreme instead of sitting
-  # exactly ON it -- the most crowded, most-hunted price on the chart (live
-  # 2026-07-06: ETH short SL $1804.00, swing top $1804.37 -- tagged by 37 cents,
-  # then a $17 reversal in the trade's favour). Breakouts have carried exactly
-  # this pad since v0.5.0 (breakout_level_buffer_pct 0.2); pullbacks never did.
-  # Risk-NEUTRAL: sizing solves backward from the wider stop, so max_loss_usdt
-  # is unchanged -- the cost is a smaller position, not a bigger loss.
+  # v0.9.28 -- SWEPT AND KILLED; keep 0. Pads the pullback structural stop beyond
+  # the 24h extreme (motivated by the live 2026-07-06 ETH short: SL $1804.00
+  # tagged by the $1804.37 swing top, then a $17 favourable reversal). The
+  # 21/35/42d x {0.2,0.4,0.6} sweep on the live 28-symbol baseline: IDENTICAL
+  # pullback trade counts and win rates at every level (the buffer rescued ZERO
+  # stops in 67 in-sample pullbacks -- the near-tag class had zero measured
+  # frequency at 1h resolution) while the size cost bled net 0.2-0.4pt/step and
+  # nudged maxDD worse in every window. All cost, no rescue -> unarmed. The knob
+  # stays (0 = bit-exact legacy) for revisit ONLY if live shows RECURRING
+  # near-tag stop-outs; one vivid anecdote lost to 67 measured trades.
   pullback_stop_buffer_pct: "0"
   breakout_time_stop_hours: "0"
   breakout_tp2_pct: "0"
