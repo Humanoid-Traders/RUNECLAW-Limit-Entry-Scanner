@@ -221,13 +221,18 @@ the trimmed size. The 0.35 was validated **jointly** with the v0.9.24
 loss-breaker recalibration (9/9 windows) — retune them together, not alone.
 
 ### Margin mode
-`margin_mode: "crossed"` is the **intentional, current default** — not a
-rule violation. The SDK's `open_*` wrappers cannot set `margin_mode`, so
-every position has always inherited `crossed` regardless of any older
-documentation claiming isolated (v0.6.4 note, `manifest.yaml:74-84`).
-`"isolated"` is implemented (routes through `place_order(margin_mode=
-'isolated')`, fail-closed) but is an explicit, untested opt-in — not
-something the engine silently violates.
+`margin_mode: "isolated"` is the default **since v0.9.29** (operator
+request — caps a gap-through-stop to the position's own margin instead of
+whole-account equity; per-trade loss is bounded by the exchange SL +
+`max_loss_usdt` in either mode). Opens route through
+`place_order(margin_mode='isolated')`, **fail-closed**: a wrong hedge
+mapping REJECTS the order rather than placing a wrong-direction trade —
+so the failure signature of this path is *missed entries*, never bad
+fills. Instant revert: the key is card-tunable; setting `"crossed"`
+restores the pre-v0.9.29 proven wrapper path with no redeploy. History:
+`crossed` was the intentional default through v0.9.28 because the SDK's
+`open_*` wrappers cannot set `margin_mode` (v0.6.4 note) — older docs
+claiming isolated were wrong, and every pre-v0.9.29 position was crossed.
 
 ---
 
@@ -263,7 +268,7 @@ margin   = notional / leverage                              # then capped by mar
 | `leverage` | 10 | :71 |
 | `margin_budget` | $100 | :72 |
 | `max_loss_usdt` | $15/trade | :73 |
-| `margin_mode` | crossed | :84 |
+| `margin_mode` | **isolated** (v0.9.29; card-revertable to crossed) | margin block |
 | `max_scan_symbols` | 28 | :85 |
 | `min_score` | 70 | :86 |
 | `max_vwap_ext_pct` | 5.0% (2.5% equities override) | :96, :313 |
