@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.32"
+version: "0.9.33"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -286,6 +286,18 @@ strategy_config:
   regime_vwap_deadzone_pct: "0"
   regime_taker_deadzone: "0"
   regime_taker_vote: "1"
+  # v0.9.33 -- pass-1 score dimension weights (signal-audit finding #5). Values
+  # = the v0.1.0 legacy split, bit-exact; each rescales its dim's CONTRIBUTION
+  # only. Built for ABLATION ("does this signal earn its weight?" -- set one to
+  # 0), not for grid-tuning, which is an overfit machine. Hard disqualifiers
+  # (walls, thin volume, no VWAP) are not weights and hold at any setting.
+  # Ablation verdicts for the two audit-flagged dims (volume: majors bias on
+  # top of the liquidity floor; orderbook: top-of-book noise) pending sweep.
+  score_w_momentum: "25"
+  score_w_vwap: "20"
+  score_w_range: "20"
+  score_w_orderbook: "20"
+  score_w_volume: "15"
   time_stop_hours: "12"
   # v0.9.22 -- trade-type exit packs (per-mode keys; 0 = inherit the global rule,
   # the exact pre-v0.9.22 behaviour). Phase-1/2 replay on the LIVE 28-symbol set:
