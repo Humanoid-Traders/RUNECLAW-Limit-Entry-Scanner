@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.29"
+version: "0.9.30"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -240,6 +240,16 @@ strategy_config:
   event_blackout_hours: "2"
   event_blackout_importance: "high"
   event_blackout_country: "US"
+  # v0.9.30 -- per-symbol EARNINGS blackout (equity.calendar.earnings). The macro
+  # calendar above does not know MSTR reports tonight; a perp entered into a
+  # report is binary-event roulette the SL cannot price. Day-granular window
+  # (the calendar carries a date, not a timestamp): the report's UTC day padded
+  # by this many hours on both sides. Entries only; scores stay visible;
+  # FAIL-OPEN (unreadable calendar = no blackout). Armed at 4h because the cost
+  # bound is structurally tiny (~1 day/quarter/symbol, ~1% of days -- unlike the
+  # session gate's 70%, which failed data validation). Opted in per-universe
+  # (equities); 0 = off.
+  earnings_blackout_hours: "4"
   time_stop_hours: "12"
   # v0.9.22 -- trade-type exit packs (per-mode keys; 0 = inherit the global rule,
   # the exact pre-v0.9.22 behaviour). Phase-1/2 replay on the LIVE 28-symbol set:
@@ -367,6 +377,7 @@ strategy_config:
       # equity breakouts are profitable; -12pt net at 42d) -- leave it unarmed.
       pullback: false
       event_blackout: true
+      earnings_blackout: true   # v0.9.30: stand down a symbol around ITS report
       overrides:
         max_vwap_ext_pct: "2.5"
 

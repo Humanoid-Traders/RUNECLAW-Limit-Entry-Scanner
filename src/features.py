@@ -369,6 +369,71 @@ def event_blackout(cfg: dict) -> Optional[dict]:
     return _blackout_event(events, now_ms, window_h, importance)
 
 
+# --- v0.9.30 earnings blackout (per-symbol RWA binary-event guard) -----------
+# The macro calendar above knows FOMC/CPI/NFP -- it does NOT know that MSTR
+# reports earnings tonight. An RWA equity perp held (or entered) into a report
+# is binary-event roulette the SL cannot price. This guard suppresses a SYMBOL's
+# candidacy around its own report date. Same contract as event_blackout:
+# opt-in (earnings_blackout_hours 0 = off), entries only (positions/limits are
+# untouched), and FAIL-OPEN everywhere -- an unreadable calendar, an unexpected
+# SDK method name, or an unparseable row can only ever mean "no blackout".
+# Cost bound: ~1 report day per quarter per symbol (~1% of days) -- the reason
+# this is shippable armed where the session gate (70% of hours) failed data
+# validation.
+
+def _earnings_window(rows: list, symbol: str, now_ms: float, pad_h: float):
+    """Pure windowing helper (unit-testable). The calendar carries a report DATE
+    plus a text reporting_time ('after market close'), not a precise timestamp,
+    so the blackout is day-granular: [report 00:00 UTC - pad_h, report 24:00 UTC
+    + pad_h]. That covers a pre-open print from the prior evening and an
+    after-close print into the next session. Returns the matching row summary
+    or None."""
+    if pad_h <= 0:
+        return None
+    day_ms = 86_400_000.0
+    pad_ms = pad_h * 3_600_000.0
+    want = str(symbol or "").upper().replace("USDT", "")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol", "")).upper()
+        if want and sym and sym != want and want not in sym:
+            continue
+        ts = _parse_event_ts(row.get("report_date"))
+        if ts is None:
+            continue  # unparseable date -> ignore that row (fail-open per row)
+        if ts - pad_ms <= now_ms <= ts + day_ms + pad_ms:
+            return {"symbol": sym or want, "report_ts": ts,
+                    "reporting_time": str(row.get("reporting_time", ""))[:24]}
+    return None
+
+
+def earnings_blackout(symbol: str, cfg: dict):
+    """The active earnings blackout for one RWA equity symbol, or None. One
+    bounded calendar read per qualified opted-in candidate per cycle (equities =
+    at most 3 symbols). FAIL-OPEN on any failure."""
+    try:
+        pad_h = float(cfg.get("earnings_blackout_hours", "0") or "0")
+    except (TypeError, ValueError):
+        pad_h = 0.0
+    if pad_h <= 0:
+        return None
+    base = str(symbol or "").upper().replace("USDT", "")
+    if not base:
+        return None
+    from datetime import datetime, timezone
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+    try:
+        obb = data.equity.calendar.earnings(
+            symbol=base,
+            start_time=int(now_ms - 2 * 86_400_000),
+            end_time=int(now_ms + 2 * 86_400_000))
+        rows = [r for r in _to_records(obb) if isinstance(r, dict)]
+    except Exception:
+        return None  # unreadable/renamed endpoint -> no blackout (fail-open)
+    return _earnings_window(rows, base, now_ms, pad_h)
+
+
 def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> SymbolFeatures:
     """Pass-2: populate kline (ATR + trend) and funding fields on ``feats``.
 
