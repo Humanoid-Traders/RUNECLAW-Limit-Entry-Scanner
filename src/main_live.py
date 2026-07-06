@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.22"
+ANALYSIS_VERSION = "0.9.23"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -221,6 +221,23 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     for sc in scans:
         qualified.extend(sc["qualified"])
     qualified.sort(key=lambda s: s.score, reverse=True)
+    # v0.9.23 PARITY FIX (signal audit finding #1): withdraw already-owned symbols
+    # (RUNECLAW-sized positions + resting limits) from candidacy, exactly as the
+    # replay harness has ALWAYS done (replay_mp scores `syms not in owned`). Every
+    # replay validation therefore assumes a blocked best FALLS THROUGH to the
+    # next-best name -- but live kept the owned symbol as `best`, died on the
+    # execution-level entry_already_pending/already_in_position guard, and placed
+    # NOTHING that cycle (the live 2h MSTR-limit window burned ~9 cycles this way
+    # while qualified names sat behind it). Scores stay on the board (digest
+    # unchanged -- same visibility contract as the blackout/session gates); only
+    # candidacy is withdrawn. Fail-safe: a state-blind cycle carries no
+    # owned_symbols -> no filter -> legacy behaviour, and open_if_allowed refuses
+    # blind placement anyway. The per-symbol guards in execution remain as the
+    # race backstop, so entry_already_pending becoming RARE on the feed is the
+    # expected signature of this fix working.
+    _owned = {str(s).upper() for s in (mgmt.get("owned_symbols") or [])}
+    if _owned:
+        qualified = [s for s in qualified if s.symbol.upper() not in _owned]
 
     any_active = any(sc["direction"] in ("long", "short") for sc in scans)
     circuit = mgmt.get("circuit", "ok")
