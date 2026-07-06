@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.29"
+ANALYSIS_VERSION = "0.9.30"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -115,7 +115,8 @@ def _universes(cfg: dict) -> list:
             # in the config so `.get(key, default)` semantics stay intact for
             # universes that omit a flag (crypto's name-based breakout default).
             for key in ("breakout", "overrides", "event_blackout",
-                        "pullback", "session_hours_utc"):  # v0.9.22 trade-type gates
+                        "pullback", "session_hours_utc",   # v0.9.22 trade-type gates
+                        "earnings_blackout"):              # v0.9.30 per-symbol guard
                 if key in u:
                     row[key] = u[key]
             out.append(row)
@@ -193,10 +194,27 @@ def _scan_universe(uni: dict, cfg: dict, blackout: dict = None) -> dict:
     sess_closed = bool(sess) and not _session_open(sess)
     if sess_closed:
         qualified = []
+    # v0.9.30 earnings blackout: the macro calendar (event_blackout above) does
+    # not know MSTR reports tonight. For an opted-in universe, withdraw a
+    # symbol's OWN candidacy around its report date (day-granular + pad; see
+    # features._earnings_window). Same contract as every gate here: entries
+    # only, scores stay visible, fail-open. Bounded cost: at most len(qualified)
+    # calendar reads for a 3-symbol universe, only when opted in.
+    earnings_out = []
+    if uni.get("earnings_blackout") and qualified:
+        kept = []
+        for s in qualified:
+            ev = features.earnings_blackout(s.symbol, cfg)
+            if ev:
+                earnings_out.append(s.symbol)
+            else:
+                kept.append(s)
+        qualified = kept
     return {"name": uni["name"], "leader": leader_sym, "regime": reg,
             "leader_feats": leader_feats, "direction": direction,
             "scored": scored, "qualified": qualified,
             "session_closed": sess_closed,
+            "earnings_blackout_symbols": earnings_out,
             "event_blackout": (blackout if blacked else None)}
 
 
@@ -272,6 +290,9 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         # v0.9.22: universes whose underlying cash session is closed this cycle
         # (their candidacy was withdrawn; scores remain on the board).
         "session_closed_universes": [sc["name"] for sc in scans if sc.get("session_closed")],
+        # v0.9.30: symbols stood down around their own earnings report this cycle.
+        "earnings_blackout_symbols": sorted(
+            {s for sc in scans for s in (sc.get("earnings_blackout_symbols") or [])}),
     }
     base_meta = {
         "regime_by_universe": regime_by_uni,
