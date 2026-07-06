@@ -42,7 +42,9 @@ _OPEN_TIME_KEYS = ("cTime", "ctime", "c_time", "create_time", "created_time", "c
                    # parsed on any row). Specific names first, generic last, so an
                    # order record with both c_time and a generic "time" is unaffected.
                    "tradeTime", "trade_time", "fillTime", "fill_time", "filledTime",
-                   "filled_time", "execTime", "exec_time", "ts", "time")
+                   "filled_time", "execTime", "exec_time",
+                   "timestamp", "created_at", "createdAt",   # v0.9.27
+                   "ts", "time")
 # v0.6.7: the live position record serialises to snake_case (open_price_avg), but
 # this list (and _record_notional) only carried the camelCase openPriceAvg + the
 # unrelated average_open_price/open_price -- so the entry price read None on every
@@ -439,7 +441,13 @@ def _fills_in_window(rows: list, window_hours: float) -> list:
     out = []
     for row in rows:
         m = _to_mapping(row) or {}
-        ts = _coerce_ms(_find_open_time_value(m))
+        # v0.9.27: coerce with _to_epoch_ms (ISO-8601 / datetime / epoch s / ms),
+        # NOT the numeric-only _coerce_ms. Third home of the same bug: pending
+        # orders (v0.4.3) and positions (v0.6.1) already learned that the SDK
+        # serialises times in non-epoch shapes ("key present, value unparseable");
+        # the fills path kept the weak coercer, leaving the loss breaker t-blind
+        # (live -b?t, probe has:<key>) while every other consumer parsed fine.
+        ts = _to_epoch_ms(_find_open_time_value(m))
         if ts is None or ts < cutoff:
             continue
         profit = None
@@ -716,7 +724,7 @@ def manage_open_state(cfg: dict) -> dict:
                     else:
                         realized, blind = None, "k"
                 else:
-                    _ts_any = any(_coerce_ms(_find_open_time_value(_to_mapping(r) or {})) is not None
+                    _ts_any = any(_to_epoch_ms(_find_open_time_value(_to_mapping(r) or {})) is not None
                                   for r in fills_rows)
                     if _ts_any:
                         realized = 0.0        # genuinely quiet window -> full headroom

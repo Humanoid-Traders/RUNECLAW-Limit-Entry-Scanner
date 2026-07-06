@@ -252,6 +252,28 @@ def test_t_blind_carries_key_probe():
     _assert(str(st.get("loss_breaker_probe", "")).startswith("alt:"),
             "probe names the alternate key -> " + str(st.get("loss_breaker_probe")))
 
+# ---- v0.9.27: ISO-timestamp fills (the third home of the v0.4.3/v0.6.1 bug) ----
+
+def test_iso_timestamp_fill_windows():
+    # SDK-serialised ISO cTime ("key present, value unparseable" under the old
+    # numeric-only _coerce_ms) must window via _to_epoch_ms -- the exact fix
+    # pending orders got in v0.4.3 and positions in v0.6.1, now applied to fills.
+    from datetime import datetime, timezone
+    iso = datetime.fromtimestamp((_NOW - 3_600_000) / 1000.0, tz=timezone.utc).isoformat()
+    cfg = _wire_state([{"symbol": "ETHUSDT", "cTime": iso, "profit": "-30"}])
+    st = execution.manage_open_state(cfg)
+    _assert(abs(st.get("realized_window_pnl") - (-30.0)) < 1e-6,
+            "ISO-8601 cTime fill windows and sums -> breaker SEES")
+    _assert("loss_breaker_blind" not in st, "ISO timestamps no longer blind the breaker")
+
+
+def test_timestamp_key_windows():
+    row = {"symbol": "ETHUSDT", "timestamp": str(_NOW - 3_600_000), "profit": "-12"}
+    cfg = _wire_state([row])
+    st = execution.manage_open_state(cfg)
+    _assert(abs(st.get("realized_window_pnl") - (-12.0)) < 1e-6,
+            "'timestamp'-keyed fill windows -> realized -12")
+
 
 
 if __name__ == "__main__":

@@ -376,6 +376,21 @@ def test_dbg_tail_priority_order():
             "a genuine pending failure (perr) beats sig.")
     _assert(_tail(rshort="cooldown") == "cooldown", "nothing matched -> rshort fallback")
 
+def test_fold_breaker_degrades_before_dropping():
+    """v0.9.27: an over-budget breaker token trims to its 4-char stage form
+    (-b?t / -b18) before being shed entirely -- the blind/sighted verdict must
+    survive the 63-char budget (the live 11:47 absence hid it exactly when the
+    t-blind investigation needed it). The tail is still never sacrificed."""
+    digest = "SCAN-cry:LINJ79x-met:sXAG68x-equ:LTSLA54x"   # live 11:47 geometry
+    line = ml._fold_exec_onto_scan(digest, 0, "0", "-b?t.cTime_", "", "no.lowscore", None)
+    _assert("-b?t-" in line and ".cTime" not in line and len(line) <= 63,
+            "probe form over budget -> 4-char stage kept -> " + line)
+    line = ml._fold_exec_onto_scan(digest, 0, "0", "-b18", "", "no.lowscore", None)
+    _assert("-b18-" in line, "healthy short form fits the same geometry")
+    line = ml._fold_exec_onto_scan(digest, 0, "0", "-b?t.cTime_", "", "no.far:3.9pct_and_more_x", None)
+    _assert("no.far" in line and len(line) <= 63, "tail always survives; breaker fully shed last")
+
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
