@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.21"
+version: "0.9.22"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -223,6 +223,26 @@ strategy_config:
   event_blackout_importance: "high"
   event_blackout_country: "US"
   time_stop_hours: "12"
+  # v0.9.22 -- trade-type exit packs (per-mode keys; 0 = inherit the global rule,
+  # the exact pre-v0.9.22 behaviour). Phase-1/2 replay on the LIVE 28-symbol set:
+  # the two entry modes want OPPOSITE leashes. Pullbacks decay when held (win%
+  # 62->38 as the cap grows -- they bounce fast or they're dead; the July-5 MSTR
+  # 8h red grind was this class), so they get a 4h cap (net +3.0/+7.7pt at
+  # 35/42d, -1.1pt noise at 21d, tail equal). Breakouts are the runners (win%
+  # RISES 70->80 with hold) -- they keep the global 12h. Both caps remain
+  # UNCONDITIONAL on P&L. Mode is recovered at manage time from the attached TP
+  # backstop width (execution._position_entry_mode; exchange-is-the-memory):
+  # pullback_tp2_pct 22 vs the breakout-inherited tp2_pct 20 is the marker --
+  # PROVEN bit-for-bit inert in replay (a 4h-capped pullback never reaches a
+  # 20-22% backstop) where marking the BREAKOUT side at 25 cost 5-7pt net in
+  # every window (that backstop genuinely governs; do NOT arm breakout_tp2_pct).
+  # Unrecoverable mode (legacy position, unreadable plan) -> global 12h cap.
+  # CAVEAT: metals had ZERO replayable pullback trades in 42d (class ~absent
+  # there), so the 4h cap is unvalidated-but-low-stakes on that universe.
+  pullback_time_stop_hours: "4"
+  pullback_tp2_pct: "22"
+  breakout_time_stop_hours: "0"
+  breakout_tp2_pct: "0"
   limit_expiry_hours: "4"
   limit_chase_pct: "3.0"
   size_scope_mult: "1.5"
@@ -308,6 +328,15 @@ strategy_config:
       leader: "QQQUSDT"
       symbols: ["TSLAUSDT", "NVDAUSDT", "MSTRUSDT"]
       breakout: true
+      # v0.9.22: equities trade BREAKOUTS ONLY. Phase-1/2 replay (21/35/42d,
+      # QQQ-led): equity pullback entries are net-NEGATIVE at EVERY hold cap
+      # (win 29-37%, n>=31/window; the July-5 weekend MSTR grind was one) while
+      # equity breakouts pay (+12/+27/+33% net, win 65-73%). Dropping the class
+      # roughly DOUBLES PF (1.3 -> 1.9-3.0) and halves maxDD (-11 -> -4.6).
+      # A session-hours gate (session_hours_utc, main_live._session_open) was
+      # also built and tested: it HURTS on top of pullback-off (off-session
+      # equity breakouts are profitable; -12pt net at 42d) -- leave it unarmed.
+      pullback: false
       event_blackout: true
       overrides:
         max_vwap_ext_pct: "2.5"

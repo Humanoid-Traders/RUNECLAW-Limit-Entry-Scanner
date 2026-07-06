@@ -744,8 +744,82 @@ def _flatten_owned(cfg: dict, owned_position_records: list, owned_pending_record
                 pass
 
 
+def _position_entry_mode(symbol: str, hold_side: str, entry, cfg: dict) -> str:
+    """v0.9.22: recover HOW a position was opened (pullback vs breakout) with no
+    local state. risk.build_plan attaches tp2 = entry*(1±tp2_pct) on pullbacks and
+    entry*(1±breakout_tp2_pct) on breakouts, and plan orders live on the exchange --
+    so the TP's relative distance from entry IS the surviving mode record (the same
+    exchange-is-the-memory contract as the trail). Returns "" (unknown -> callers
+    fall back to the less-specific global cap, i.e. exact pre-v0.9.22 behaviour)
+    when the marker isn't armed (widths equal or zero), entry/TP can't be read, or
+    the observed width doesn't sit near either expected width (a legacy position or
+    a manually-edited TP must never be reclassified on noise)."""
+    try:
+        base = float(cfg.get("tp2_pct", "15.0")) / 100.0
+        pb2 = (float(cfg.get("pullback_tp2_pct", "0") or "0") / 100.0) or base
+        bk2 = (float(cfg.get("breakout_tp2_pct", "0") or "0") / 100.0) or base
+    except (TypeError, ValueError):
+        return ""
+    if pb2 <= 0 or bk2 <= 0 or abs(bk2 - pb2) < 1e-9:
+        return ""                     # marker not armed -> modes indistinguishable
+    try:
+        entry = float(entry)
+    except (TypeError, ValueError):
+        return ""
+    if entry <= 0:
+        return ""
+    # Find the TP plan order's trigger: any plan trigger on the PROFIT side of
+    # entry (above for a long, below for a short). The SL/trail always sits on the
+    # protective side, so the two cannot be confused. Shape-tolerant + fail-safe:
+    # any read/parse surprise -> "" (the global cap stays in force).
+    try:
+        plan = trade.contract.plan_pending_orders(symbol=symbol)
+        rows = plan if isinstance(plan, (list, tuple)) else None
+        if rows is None:
+            m = _to_mapping(plan) or {}
+            for key in ("data", "orders", "list", "rows", "entrustedList"):
+                if isinstance(m.get(key), (list, tuple)):
+                    rows = m[key]
+                    break
+        if rows is None:
+            return ""
+        is_long = str(hold_side).lower() in ("long", "buy")
+        width = None
+        for row in rows:
+            trig = _find_number(row, _TRIGGER_KEYS)
+            if trig is None or trig <= 0:
+                continue
+            if (trig > entry) if is_long else (trig < entry):
+                width = abs(trig - entry) / entry   # profit-side trigger == the TP backstop
+                break
+        if width is None:
+            return ""
+    except Exception:
+        return ""
+    # Nearest expected width wins, but only within a tolerance keyed to the GAP
+    # between the two widths (40%): price-step alignment noise on the trigger is
+    # ~0.1-0.2% absolute (width noise ~0.002, far inside a 0.02 gap), while a
+    # legacy/manual TP parked between or away from both widths is refused.
+    d_pb, d_bk = abs(width - pb2), abs(width - bk2)
+    dist, label = (d_bk, "breakout") if d_bk < d_pb else (d_pb, "pullback")
+    if dist > 0.4 * abs(bk2 - pb2):
+        return ""                     # ambiguous / foreign TP width -> refuse
+    return label
+
+
 def _best_effort_position_controls(cfg: dict, records: list, status: dict, actions: list) -> None:
     max_age_h = float(cfg.get("time_stop_hours", "12"))  # default aligned with manifest (v0.9.4)
+    # v0.9.22 per-entry-mode hold caps (opt-in; 0/absent = inherit the global cap,
+    # exactly the pre-v0.9.22 behaviour). Phase-1 replay on the live 28-symbol set:
+    # pullbacks DECAY when held (win% 62->38 as the cap grows -- they bounce fast
+    # or they're dead) while breakouts are the runners (win% RISES 70->80 with
+    # hold) -- opposite optimal leashes. Resolved per position via the tp2-width
+    # mode marker; an unrecoverable mode keeps the global cap (fail-safe).
+    try:
+        _ts_bk = float(cfg.get("breakout_time_stop_hours", "0") or "0")
+        _ts_pb = float(cfg.get("pullback_time_stop_hours", "0") or "0")
+    except (TypeError, ValueError):
+        _ts_bk = _ts_pb = 0.0
     be_trigger_usdt = float(cfg.get("breakeven_trigger_usdt", "20"))
     be_trigger_pct = float(cfg.get("breakeven_pct", "2.0")) / 100.0
     now_ms = _now_ms()
@@ -782,7 +856,19 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
         age_h = (now_ms - open_ms) / 3_600_000.0 if (open_ms and open_ms > 0) else None
         diag["age_h"] = round(age_h, 2) if age_h is not None else None
         diag["ts_ok"] = age_h is not None  # False => open-time unreadable (time-stop blind)
-        if age_h is not None and 0 < age_h <= 240 and age_h >= max_age_h:
+        # v0.9.22: per-mode hold cap. Only ever consulted when a per-mode key is
+        # armed (opt-in cost: one plan-orders read per held position per cycle);
+        # unknown mode -> the global cap (silent no-ops are surfaced via tmode).
+        cap_h = max_age_h
+        if _ts_bk > 0 or _ts_pb > 0:
+            _mode = _position_entry_mode(symbol, hold_side,
+                                         _find_number(record, _ENTRY_PRICE_KEYS), cfg)
+            diag["tmode"] = _mode or "?"
+            if _mode == "breakout" and _ts_bk > 0:
+                cap_h = _ts_bk
+            elif _mode == "pullback" and _ts_pb > 0:
+                cap_h = _ts_pb
+        if age_h is not None and 0 < age_h <= 240 and age_h >= cap_h:
             try:
                 trade.contract.close_position(symbol=symbol, hold_side=hold_side)
                 actions.append({"time_stop_close": symbol, "age_h": round(age_h, 2)})

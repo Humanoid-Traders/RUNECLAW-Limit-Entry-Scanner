@@ -98,8 +98,9 @@ currently-managed position. Format pieces:
   or trimmed · `r` = the trail set the stop this cycle.
 - `.t<age>h` = hours held, floor-rounded (e.g. age 7.9h renders `t7h`). This
   is a **plain age counter**, not a ceiling — it climbs every cycle. It has no
-  relationship to a "2H/4H" rule; the only unconditional clock is the 12h
-  time-stop (§3).
+  relationship to a "2H/4H" rule; the only unconditional clocks are the
+  per-mode time-stops (v0.9.22: pullback 4h / breakout+unknown 12h — §3),
+  and they stay unconditional on P&L.
 
 ### ⚠️ Observability gap worth knowing
 
@@ -157,15 +158,31 @@ All in `src/execution.py`, `_best_effort_position_controls` +
 `_trail_stop` + `_scale_out`. Runs every cycle against every currently owned
 position, independent of what the entry pipeline decided that cycle.
 
-### Time-stop — the one truly unconditional exit
+### Time-stop — the one truly unconditional exit (per-mode since v0.9.22)
 ```
-age_h >= time_stop_hours (12)   ->  close_position(), NO other condition
+age_h >= cap_h  ->  close_position(), NO other condition
+cap_h = 4h  if the position was opened as a PULLBACK   (pullback_time_stop_hours)
+      = 12h if opened as a BREAKOUT, or mode unknown   (global time_stop_hours)
 ```
 **There is no P&L check anywhere in this branch.** Green or red, the position
-closes at 12h. (A `240h` outer bound exists only to reject a garbage/
+closes at its cap. (A `240h` outer bound exists only to reject a garbage/
 unparseable open-time, not as a second threshold.) The only reason this can
 silently *not* fire is if the open-time is unparseable (`ts_ok: False` in the
 diag) — a genuinely blind time-stop, distinct from choosing to hold.
+
+**Why per-mode (v0.9.22):** 21/35/42d replay on the live 28-symbol set —
+pullbacks decay when held (win% 62→38 as the cap grows; they bounce fast or
+they're dead — the July-5 8h MSTR grind was this class) while breakouts are
+the runners (win% *rises* 70→80 with hold). **How the mode is known with no
+local state:** the attached TP backstop width is the marker —
+`pullback_tp2_pct: 22` vs the breakout-inherited `tp2_pct: 20` — read back
+from the exchange's TP plan order by `execution._position_entry_mode`
+(`tmode` in the position diag). An ambiguous/foreign width (legacy position,
+manually edited TP) refuses to classify and keeps the 12h global cap.
+Equities additionally run **breakout-only** (`pullback: false` — their
+pullback class was net-negative at every hold cap in replay), and a
+session-hours gate exists (`session_hours_utc`) but ships **unarmed**: it
+*hurt* on top of pullback-off (off-session equity breakouts are profitable).
 
 ### Trailing stop — one-way ratchet off *current* price, not the high-water mark
 Every cycle: `trail = current_price ∓ trail_atr_mult(2.0) × ATR(14, 1h)`.
@@ -261,7 +278,10 @@ margin   = notional / leverage                              # then capped by mar
 | `max_correlated_alts` | 2 | :185 |
 | `loss_breaker_frac` / window | 0.08 / 24h | :200-201 |
 | `event_blackout_hours` | 2 (equities only) | :217-224 |
-| `time_stop_hours` | **12** (unconditional) | :225 |
+| `time_stop_hours` | **12** (unconditional; breakout + unknown-mode cap) | :225 |
+| `pullback_time_stop_hours` | **4** (unconditional; v0.9.22 per-mode cap) | v0.9.22 block |
+| `pullback_tp2_pct` | 22 (mode marker; replay-proven inert) | v0.9.22 block |
+| equities `pullback` | **false** (breakout-only universe, v0.9.22) | equities block |
 | `limit_expiry_hours` | 4 | :226 |
 | `limit_chase_pct` | 3.0% | :227 |
 | `size_scope_mult` | 1.5 | :228 |

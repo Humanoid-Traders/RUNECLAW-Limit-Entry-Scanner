@@ -7,6 +7,7 @@ manager (circuit breaker, time-stops, auto-breakeven) and place the best
 qualifying setup subject to the concurrent + correlation caps.
 """
 import math
+from datetime import datetime, timezone
 from typing import Any
 
 from getagent import runtime
@@ -18,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.21"
+ANALYSIS_VERSION = "0.9.22"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -71,6 +72,27 @@ def _field_health(ft) -> dict:
             ("last", "vwap", "high", "low", "change_pct", "quote_volume", "bid_volume", "ask_volume")}
 
 
+def _session_open(spec: str) -> bool:
+    """v0.9.22: True iff now-UTC is a WEEKDAY inside the "HH:MM-HH:MM" UTC window
+    `spec`. The underlying-session gate for RWA universes (equities): perps trade
+    24/7 but the cash market keeps hours, and outside them the perp has no price
+    discovery. Weekends are always closed. Fail-OPEN on a malformed spec -- a
+    config typo must never silently halt a universe. NOTE: the window is a fixed
+    UTC range, so US DST shifts it by 1h twice a year (13:30-20:00 UTC = RTH in
+    summer/EDT); adjust the manifest value seasonally or accept the 1h skew.
+    Mirrored by research/replay_mp._session_open_ts so sweeps validate this gate."""
+    try:
+        a, b = spec.split("-", 1)
+        h1, m1 = (int(x) for x in a.split(":"))
+        h2, m2 = (int(x) for x in b.split(":"))
+        now = datetime.now(timezone.utc)
+        if now.weekday() >= 5:            # Sat/Sun: cash market closed
+            return False
+        return (h1 * 60 + m1) <= (now.hour * 60 + now.minute) < (h2 * 60 + m2)
+    except (TypeError, ValueError, AttributeError):
+        return True
+
+
 def _universes(cfg: dict) -> list:
     """List of {name, leader, symbols, allow_short}. Falls back to the legacy
     single BTC-led universe from ``trading_symbols`` when ``universes`` is unset."""
@@ -92,7 +114,8 @@ def _universes(cfg: dict) -> list:
             # ran pullback-only at the global ext cap). Copy only keys PRESENT
             # in the config so `.get(key, default)` semantics stay intact for
             # universes that omit a flag (crypto's name-based breakout default).
-            for key in ("breakout", "overrides", "event_blackout"):
+            for key in ("breakout", "overrides", "event_blackout",
+                        "pullback", "session_hours_utc"):  # v0.9.22 trade-type gates
                 if key in u:
                     row[key] = u[key]
             out.append(row)
@@ -155,9 +178,25 @@ def _scan_universe(uni: dict, cfg: dict, blackout: dict = None) -> dict:
     blacked = bool(blackout and uni.get("event_blackout"))
     if blacked:
         qualified = []
+    # v0.9.22 trade-type gates (entry-side only; management is never touched, same
+    # contract as the event blackout -- scores stay visible, candidacy withdrawn):
+    #  (a) `pullback: false` -> this universe trades breakouts ONLY. Phase-1 replay
+    #      on the QQQ-led equities set: pullback entries are net-NEGATIVE at EVERY
+    #      hold cap (win 32-37%, n>=50) while breakouts pay (+17-20%, win 58-66%).
+    #  (b) `session_hours_utc: "HH:MM-HH:MM"` -> new entries only while the
+    #      underlying CASH market is open (weekends always closed). Perps trade
+    #      24/7, but with the cash session shut an RWA perp has no price
+    #      discovery -- the July-5 weekend MSTR hold was 8h of drift into the stop.
+    if uni.get("pullback") is False:
+        qualified = [s for s in qualified if s.entry_mode == "breakout"]
+    sess = str(uni.get("session_hours_utc", "") or "")
+    sess_closed = bool(sess) and not _session_open(sess)
+    if sess_closed:
+        qualified = []
     return {"name": uni["name"], "leader": leader_sym, "regime": reg,
             "leader_feats": leader_feats, "direction": direction,
             "scored": scored, "qualified": qualified,
+            "session_closed": sess_closed,
             "event_blackout": (blackout if blacked else None)}
 
 
@@ -213,6 +252,9 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         # None) and which universes it suppressed this cycle.
         "event_blackout": blackout,
         "blackout_universes": [sc["name"] for sc in scans if sc.get("event_blackout")],
+        # v0.9.22: universes whose underlying cash session is closed this cycle
+        # (their candidacy was withdrawn; scores remain on the board).
+        "session_closed_universes": [sc["name"] for sc in scans if sc.get("session_closed")],
     }
     base_meta = {
         "regime_by_universe": regime_by_uni,
