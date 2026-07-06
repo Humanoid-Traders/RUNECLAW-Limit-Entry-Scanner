@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.25"
+ANALYSIS_VERSION = "0.9.26"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -465,7 +465,13 @@ def _breaker_token(mgmt: dict) -> str:
     if hr is not None:
         return "-b{}".format(int(round(hr))) if hr > 0 else "-b!{}".format(int(round(-hr)))
     if mgmt.get("loss_breaker_threshold") is not None:
-        return "-b?" + str(mgmt.get("loss_breaker_blind") or "")[:1]
+        tok = "-b?" + str(mgmt.get("loss_breaker_blind") or "")[:1]
+        # v0.9.26: a t-blind carries the time-key probe (has:/alt:<key>) so the
+        # feed names the SDK's actual field -- the fix becomes a one-line key add.
+        probe = str(mgmt.get("loss_breaker_probe") or "")
+        if ":" in probe:
+            tok += "." + probe.split(":", 1)[1][:6]
+        return tok
     return ""
 
 

@@ -228,6 +228,31 @@ def test_blind_stage_no_profit_key():
     _assert(st.get("realized_window_pnl") is None, "unreadable profit field -> realized None")
     _assert(st.get("loss_breaker_blind") == "k", "profit key mismatch -> blind stage 'k' -> token -b?k")
 
+# ---- v0.9.26: fill-flavoured time keys + the t-blind key probe ----
+
+def test_trade_time_key_now_windows():
+    # the live -b?t root-cause class: a fill row whose timestamp comes under a
+    # trade/fill-flavoured name. v0.9.26 adds these to _OPEN_TIME_KEYS, so the
+    # row windows and the breaker SEES (realized sums, no blind).
+    row = {"symbol": "ETHUSDT", "trade_time": str(_NOW - 3_600_000), "profit": "-30"}
+    cfg = _wire_state([row])
+    st = execution.manage_open_state(cfg)
+    _assert(abs(st.get("realized_window_pnl") - (-30.0)) < 1e-6,
+            "trade_time-keyed fill windows -> realized -30 (breaker sees)")
+    _assert("loss_breaker_blind" not in st, "not blind once the key is known")
+
+
+def test_t_blind_carries_key_probe():
+    # an UNKNOWN time key -> still t-blind, but the v0.4.2 probe names the SDK's
+    # actual field (alt:<key>) so the feed itself dictates the one-line fix.
+    row = {"symbol": "ETHUSDT", "weirdFillTs": str(_NOW - 3_600_000), "profit": "-30"}
+    cfg = _wire_state([row])
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("loss_breaker_blind") == "t", "unknown time key -> still t-blind")
+    _assert(str(st.get("loss_breaker_probe", "")).startswith("alt:"),
+            "probe names the alternate key -> " + str(st.get("loss_breaker_probe")))
+
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -35,7 +35,14 @@ _STATE_FILE = _STATE_DIR / "runeclaw_scanner.json"
 # so it was latently broken too. Carry both cases, like every other key list. (v0.1.18)
 _OPEN_TIME_KEYS = ("cTime", "ctime", "c_time", "create_time", "created_time", "createTime",
                    "createdTime", "openTime", "open_time", "uTime", "u_time", "update_time",
-                   "updateTime")
+                   "updateTime",
+                   # v0.9.26: FILL rows are trades, not orders -- their timestamp comes
+                   # under trade/fill-flavoured names the order-flavoured list above
+                   # never carried (the live -b?t blind: rows arrived, no timestamp
+                   # parsed on any row). Specific names first, generic last, so an
+                   # order record with both c_time and a generic "time" is unaffected.
+                   "tradeTime", "trade_time", "fillTime", "fill_time", "filledTime",
+                   "filled_time", "execTime", "exec_time", "ts", "time")
 # v0.6.7: the live position record serialises to snake_case (open_price_avg), but
 # this list (and _record_notional) only carried the camelCase openPriceAvg + the
 # unrelated average_open_price/open_price -- so the entry price read None on every
@@ -717,6 +724,16 @@ def manage_open_state(cfg: dict) -> dict:
                         realized, blind = None, "t"
             if blind:
                 status["loss_breaker_blind"] = blind
+                # v0.9.26: on a t-blind, run the v0.4.2 time-key probe against the
+                # first row so the feed itself names the SDK's actual key
+                # (has:<known-key-with-unparseable-value> / alt:<renamed-key> /
+                # none) -- the compact token renders -b?t.<key> and the fix
+                # becomes a one-line _OPEN_TIME_KEYS addition, no guessing.
+                if blind == "t" and fills_rows:
+                    try:
+                        status["loss_breaker_probe"] = _time_key_probe(fills_rows[0])
+                    except Exception:
+                        pass
             status["realized_window_pnl"] = None if realized is None else round(realized, 4)
             # v0.9.7 observability: emit the breaker's own arithmetic so the
             # operator never re-derives it (the recurring equity*frac misread).
