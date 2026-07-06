@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.26"
+ANALYSIS_VERSION = "0.9.27"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -676,8 +676,15 @@ def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
     def _build(bk: str) -> str:
         return "%s|%so%sp%s%s%s-%s" % (scan_digest, lead, own, pT, bk, cbx, tail)
     line = _build(bkr)
-    if len(line) > 63 and bkr:           # protect the tail: shed breaker headroom first
-        line = _build("")
+    if len(line) > 63 and bkr:           # protect the tail: shed breaker detail first
+        # v0.9.27: degrade GRACEFULLY before dropping. The probe-suffixed blind
+        # form (-b?t.<key>) rarely fits a 3-universe line, and shedding it whole
+        # hid the blind/sighted verdict exactly when the investigation needed it
+        # (the 11:47 absence). Trim to the 4-char stage form (-b?t / -b18) first;
+        # drop entirely only if even that cannot fit.
+        line = _build(bkr[:4])
+        if len(line) > 63:
+            line = _build("")
     if fate:
         cand = "%s|%s" % (line, fate)
         if len(cand) <= 63:              # fate only if it still fits; never truncates the tail
