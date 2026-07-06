@@ -187,6 +187,48 @@ def test_open_if_allowed_pauses_on_breaker():
             "mgmt.loss_breaker -> open refused with reason loss_breaker")
 
 
+# ---- v0.9.25: stale-window false-blind fix + blind-stage classification ----
+
+def test_stale_window_is_quiet_not_blind():
+    # THE v0.9.25 bug fix: fills exist but are ALL OLDER than the 24h window ->
+    # that is a QUIET window (realized 0, full headroom, token -b<threshold>),
+    # NOT a blind -b?. Pre-fix, _realized_pnl returned None here, so any account
+    # whose last fills aged past 24h showed a chronic false-blind breaker.
+    cfg = _wire_state([_fill(-40, 48), _fill(25, 60)])   # readable ts, outside window
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("realized_window_pnl") == 0.0,
+            "all fills older than the window -> realized 0.0 (quiet), not None (blind)")
+    _assert(abs(st.get("loss_breaker_headroom") - 80.0) < 1e-6,
+            "full headroom -> token reads -b80, the never-before-seen number")
+    _assert("loss_breaker_blind" not in st, "not blind -> no blind-stage recorded")
+
+
+def test_blind_stage_read_failure():
+    def _raise(**k):
+        raise RuntimeError("boom")
+    cfg = _wire_state([])
+    _trade.contract.fills = _raise
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("loss_breaker_blind") == "r", "read failure -> blind stage 'r' -> token -b?r")
+
+
+def test_blind_stage_no_timestamps():
+    # rows present but NO row carries a parseable open-time -> can't window -> blind 't'
+    cfg = _wire_state([{"symbol": "ETHUSDT", "profit": "-30"}])
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("realized_window_pnl") is None, "unwindowable rows -> realized None")
+    _assert(st.get("loss_breaker_blind") == "t", "no timestamps -> blind stage 't' -> token -b?t")
+
+
+def test_blind_stage_no_profit_key():
+    # in-window fill whose realized PnL sits under an unrecognised key -> blind 'k'
+    row = {"symbol": "ETHUSDT", "cTime": str(_NOW - 3_600_000), "weirdPnlField": "-30"}
+    cfg = _wire_state([row])
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("realized_window_pnl") is None, "unreadable profit field -> realized None")
+    _assert(st.get("loss_breaker_blind") == "k", "profit key mismatch -> blind stage 'k' -> token -b?k")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.24"
+ANALYSIS_VERSION = "0.9.25"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -455,14 +455,17 @@ def _breaker_token(mgmt: dict) -> str:
     recurring equity*frac misread). This surfaces it where it is actually read:
       -b<headroom>  breaker armed, <headroom> = further realized loss to the trip
       -b!<over>     already TRIPPED (headroom <= 0), <over> past the threshold
-      -b?           armed but the fills window is unreadable this cycle
+      -b?<stage>    armed but BLIND this cycle; v0.9.25 names the failing stage
+                    (r = fills read failed, t = no row timestamp parsed,
+                     k = in-window fills carry no recognised profit field) so a
+                    chronic blind diagnoses itself from the feed
       ""            breaker disabled (frac 0) -- nothing misleading emitted
     """
     hr = mgmt.get("loss_breaker_headroom")
     if hr is not None:
         return "-b{}".format(int(round(hr))) if hr > 0 else "-b!{}".format(int(round(-hr)))
     if mgmt.get("loss_breaker_threshold") is not None:
-        return "-b?"   # armed (threshold computed) but realized PnL unreadable
+        return "-b?" + str(mgmt.get("loss_breaker_blind") or "")[:1]
     return ""
 
 
