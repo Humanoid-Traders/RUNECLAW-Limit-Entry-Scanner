@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.30"
+version: "0.9.31"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -250,6 +250,20 @@ strategy_config:
   # session gate's 70%, which failed data validation). Opted in per-universe
   # (equities); 0 = off.
   earnings_blackout_hours: "4"
+  # v0.9.31 -- regime vote dead-zones (signal-audit finding #2: all three regime
+  # votes were razor-edged, so a leader hovering at +0.05% or brushing VWAP
+  # flipped the whole universe long<->short between cycles -- the live L<->s
+  # whipsaw churning limit placements). A dead-zone withdraws a vote inside its
+  # noise band -> weak tape yields reduced-size/none regimes instead of
+  # full-size flips. Stateless; 0 = bit-exact legacy edges. ARMING AWAITS the
+  # 21/35/42d sweep. regime_taker_vote gates the third vote entirely: the
+  # replay harness has never simulated taker (every validation is of the 2-vote
+  # gate), so "0" = exact live/replay parity; "1" (default) = current live
+  # behaviour. All four card-tunable.
+  regime_chg_deadzone_pct: "0"
+  regime_vwap_deadzone_pct: "0"
+  regime_taker_deadzone: "0"
+  regime_taker_vote: "1"
   time_stop_hours: "12"
   # v0.9.22 -- trade-type exit packs (per-mode keys; 0 = inherit the global rule,
   # the exact pre-v0.9.22 behaviour). Phase-1/2 replay on the LIVE 28-symbol set:

@@ -38,12 +38,36 @@ class Scored:
 
 def regime(btc: SymbolFeatures, taker_ratio: Optional[float], cfg: dict) -> Regime:
     allow_short = bool(cfg.get("allow_short", True))
-    up = bool(btc.ok and btc.change_pct is not None and btc.change_pct > 0)
-    down = bool(btc.ok and btc.change_pct is not None and btc.change_pct < 0)
-    above = bool(btc.ok and btc.last is not None and btc.vwap is not None and btc.last > btc.vwap)
-    below = bool(btc.ok and btc.last is not None and btc.vwap is not None and btc.last < btc.vwap)
-    taker_buy = bool(taker_ratio is not None and taker_ratio > 1.0)
-    taker_sell = bool(taker_ratio is not None and taker_ratio < 1.0)
+    # v0.9.31 -- vote DEAD-ZONES (signal-audit finding #2). All three regime votes
+    # were razor-edged (change_pct vs 0, last vs vwap, taker vs 1.0): a leader
+    # hovering at +0.05% or brushing VWAP flipped the WHOLE universe long<->short
+    # between 15-minute cycles (the live L<->s whipsaw: limits placed, stale-
+    # cancelled, replaced). A dead-zone withdraws a vote when its signal is inside
+    # the noise band, so weak tape yields fewer votes -> reduced-size or none
+    # regimes instead of full-size direction flips. STATELESS (no cycle memory --
+    # the runtime forbids it); all defaults 0 = bit-exact legacy edges.
+    # regime_taker_vote gates the third vote entirely: the replay harness has
+    # NEVER simulated taker (it passes None), so every validation ever run is of
+    # the 2-vote gate -- "0" restores exact live/replay parity (the v0.9.23
+    # argument); "1" (default) keeps current live behaviour. Card-tunable.
+    def _dz(key: str) -> float:
+        try:
+            return max(float(cfg.get(key, "0") or "0"), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    chg_dz = _dz("regime_chg_deadzone_pct")          # % day-change band with no vote
+    vwap_dz = _dz("regime_vwap_deadzone_pct") / 100.0  # % distance-from-VWAP band
+    tk_dz = _dz("regime_taker_deadzone")             # ratio band around 1.0
+    taker_on = str(cfg.get("regime_taker_vote", "1")).strip().lower() not in ("0", "false", "no")
+
+    up = bool(btc.ok and btc.change_pct is not None and btc.change_pct > chg_dz)
+    down = bool(btc.ok and btc.change_pct is not None and btc.change_pct < -chg_dz)
+    above = bool(btc.ok and btc.last is not None and btc.vwap is not None
+                 and btc.last > btc.vwap * (1.0 + vwap_dz))
+    below = bool(btc.ok and btc.last is not None and btc.vwap is not None
+                 and btc.last < btc.vwap * (1.0 - vwap_dz))
+    taker_buy = bool(taker_on and taker_ratio is not None and taker_ratio > 1.0 + tk_dz)
+    taker_sell = bool(taker_on and taker_ratio is not None and taker_ratio < 1.0 - tk_dz)
 
     long_score = (1 if up else 0) + (1 if above else 0) + (1 if taker_buy else 0)
     short_score = (1 if down else 0) + (1 if below else 0) + (1 if taker_sell else 0)
