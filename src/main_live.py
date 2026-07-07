@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.34"
+ANALYSIS_VERSION = "0.9.36"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -478,7 +478,9 @@ def _breaker_token(mgmt: dict) -> str:
       -b!<over>     already TRIPPED (headroom <= 0), <over> past the threshold
       -b?<stage>    armed but BLIND this cycle; v0.9.25 names the failing stage
                     (r = fills read failed, t = no row timestamp parsed,
-                     k = in-window fills carry no recognised profit field) so a
+                     k = in-window fills carry no recognised profit field,
+                     e = fills read EMPTY on a state-blind cycle -- "empty" is
+                     untrustworthy while sibling reads fail, v0.9.36) so a
                     chronic blind diagnoses itself from the feed
       ""            breaker disabled (frac 0) -- nothing misleading emitted
     """

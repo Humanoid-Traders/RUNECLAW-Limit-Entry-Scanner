@@ -714,7 +714,24 @@ def manage_open_state(cfg: dict) -> dict:
             if fills_rows is None:
                 realized, blind = None, "r"
             elif not fills_rows:
-                realized = 0.0
+                # v0.9.36 -- degraded-cycle guard (flagged reviewing the
+                # 2026-07-07 cold start; that line turned out to be a benign
+                # non-follow cycle, but the review exposed this hole): a
+                # SUCCESS-EMPTY fills read is trusted as realized 0 -> full
+                # headroom even on a cycle where the position/pending reads
+                # came back blind -- i.e. the one situation where "empty"
+                # plausibly means "API layer degraded" (fresh-subscription
+                # provisioning, bridge outage) rather than "quiet account".
+                # state_blind already blocks new entries on such a cycle, but
+                # the breaker's headroom/token would still read clean and a
+                # LATER healthy cycle inherits no memory of the doubt. Classify
+                # empty-while-blind as blind (stage "e") so the token tells the
+                # truth (-b?e, stand-down posture). Healthy-read empty stays
+                # realized 0 / full headroom (the v0.9.18 quiet-window tell).
+                if status.get("state_blind"):
+                    realized, blind = None, "e"
+                else:
+                    realized = 0.0
             else:
                 _inw = _fills_in_window(fills_rows, lb_window)
                 if _inw:
