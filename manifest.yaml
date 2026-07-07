@@ -302,6 +302,12 @@ strategy_config:
   #               re-examine -- NOT armed.
   # Verdict: the rolling 24h VWAP is defended a second time (dead-zone sweep
   # killed softening it; this killed re-anchoring it). It stays the anchor.
+  # v0.9.37 score-weighted sizing probe (score_size_floor=0.7 in replay_mp;
+  # floor at score 70 -> full size at 90): KILLED -- net -4.3/-18.5/-21.5pt
+  # across 21/35/42d for ~4pt of DD relief. THIRD independent confirmation
+  # that score is a THRESHOLD, not a magnitude: the 70-75 floor-grazers carry
+  # a disproportionate share of the net (same fact behind the min_score-75
+  # catastrophe and the flat weight ablations). Do not size by score.
   # (Equities min_score 80/85 swept in the same run: KILLED -- net collapses
   #  22.5->8.8 / 31.9->8.8; the small-universe score inflation is real but
   #  harmless, the 70-floor trades are profitable. Stays 70.)
