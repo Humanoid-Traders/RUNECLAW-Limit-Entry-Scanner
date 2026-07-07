@@ -1,0 +1,157 @@
+{
+ "regime": {
+  "detail": {
+   "above_vwap": false,
+   "allow_short": true,
+   "below_vwap": true,
+   "btc_change_pct": 2.138797,
+   "long_gate_score": 1,
+   "short_gate_score": 1,
+   "taker_ratio": null
+  },
+  "direction": "long"
+ },
+ "scored": [
+  {
+   "dims": {
+    "bidask_ratio": null,
+    "momentum": 24.52,
+    "orderbook": 8.0,
+    "orderbook_degraded": true,
+    "quote_volume": 1824957709.4901,
+    "range": 10.0,
+    "range_pos": 0.384,
+    "rel_strength": -0.7552,
+    "total": 57.52,
+    "volume": 15.0,
+    "vwap": 0.0,
+    "vwap_ext_pct": -0.783
+   },
+   "enrich": {
+    "atr": 14.97637003,
+    "entry_mode": "pullback",
+    "reason": "",
+    "skip": false,
+    "structure_dir": "long",
+    "swing_high": 1833.0,
+    "swing_low": 1756.44,
+    "trend": [
+     "short",
+     0.139382
+    ]
+   },
+   "entry_mode": "pullback",
+   "plan": {
+    "entry": 1777.57281538,
+    "entry_mode": "pullback",
+    "margin_usdt": 53.3776,
+    "note": "",
+    "notional_usdt": 533.7756,
+    "sl_pct": 0.0281017,
+    "sl_price": 1727.62,
+    "tp1": 1866.45145615,
+    "tp2": 2168.63883477,
+    "trail_atr": 29.95274005
+   },
+   "score": 57.5186,
+   "side": "long",
+   "skip": false,
+   "skip_reason": "",
+   "symbol": "ETHUSDT"
+  },
+  {
+   "dims": {
+    "bidask_ratio": null,
+    "momentum": 25.0,
+    "orderbook": 8.0,
+    "orderbook_degraded": true,
+    "quote_volume": 19733434.948444,
+    "range": 10.0,
+    "range_pos": 0.351,
+    "rel_strength": -0.6635,
+    "total": 43.05,
+    "volume": 0.05,
+    "vwap": 0.0,
+    "vwap_ext_pct": -1.238
+   },
+   "enrich": {
+    "atr": 3e-08,
+    "entry_mode": "pullback",
+    "reason": "",
+    "skip": false,
+    "structure_dir": "long",
+    "swing_high": 2.7995e-06,
+    "swing_low": 2.6556e-06,
+    "trend": [
+     "short",
+     0.218107
+    ]
+   },
+   "entry_mode": "pullback",
+   "plan": {
+    "entry": 2.7e-06,
+    "entry_mode": "pullback",
+    "margin_usdt": 44.5533,
+    "note": "",
+    "notional_usdt": 445.5332,
+    "sl_pct": 0.03366753,
+    "sl_price": 2.61e-06,
+    "tp1": 2.83e-06,
+    "tp2": 3.29e-06,
+    "trail_atr": 6e-08
+   },
+   "score": 43.05,
+   "side": "long",
+   "skip": false,
+   "skip_reason": "",
+   "symbol": "PEPEUSDT"
+  },
+  {
+   "dims": {
+    "bidask_ratio": null,
+    "momentum": 0.0,
+    "orderbook": 8.0,
+    "orderbook_degraded": true,
+    "quote_volume": 13698710.51023,
+    "range": 0.0,
+    "range_pos": 0.044,
+    "rel_strength": -5.4261,
+    "total": 8.0,
+    "volume": 0.0,
+    "vwap": 0.0,
+    "vwap_ext_pct": -2.642
+   },
+   "enrich": {
+    "atr": 0.00208896,
+    "entry_mode": "pullback",
+    "reason": "",
+    "skip": false,
+    "structure_dir": "neutral",
+    "swing_high": 0.20383,
+    "swing_low": 0.1937,
+    "trend": [
+     "short",
+     0.821331
+    ]
+   },
+   "entry_mode": "pullback",
+   "plan": {
+    "entry": 0.19700533,
+    "entry_mode": "pullback",
+    "margin_usdt": 57.7691,
+    "note": "",
+    "notional_usdt": 577.6907,
+    "sl_pct": 0.02596545,
+    "sl_price": 0.19189,
+    "tp1": 0.2068556,
+    "tp2": 0.24034651,
+    "trail_atr": 0.00417792
+   },
+   "score": 8.0,
+   "side": "long",
+   "skip": false,
+   "skip_reason": "",
+   "symbol": "XLMUSDT"
+  }
+ ]
+}
