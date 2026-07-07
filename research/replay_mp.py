@@ -130,6 +130,35 @@ def _max_drawdown(seq):
     return mdd
 
 
+def _recon(sym, win, cfg):
+    """v0.9.35 probe -- anchored-VWAP A/B. Reconstruct features, then optionally
+    re-anchor the VWAP: '' (default) = the live rolling 24h volume-weighted
+    close; 'day' = anchored at the UTC day open; 'swing' = anchored at the last
+    confirmed swing pivot (features.swing_points, same k as live). The VWAP
+    feeds entry pricing (vwap +/- atr_mult*atr), the vwap score dim, a regime
+    vote, and the max_vwap_ext gate -- overriding SF.vwap covers all four.
+    Fail-open: thin/empty segment -> the rolling VWAP stands."""
+    f = R.recon_features(sym, win)
+    mode = str(cfg.get("vwap_anchor", "") or "").strip().lower()
+    if not mode or not getattr(f, "ok", False):
+        return f
+    seg = None
+    if mode == "day":
+        day0 = win[-1][0] - (win[-1][0] % 86400000)
+        seg = [b for b in win if b[0] >= day0]
+    elif mode == "swing":
+        bars = [{"open": b[1], "high": b[2], "low": b[3], "close": b[4]} for b in win]
+        hs, ls = features.swing_points(bars, k=int(cfg.get("swing_k", 3)))
+        idx = max(hs[-1][0] if hs else 0, ls[-1][0] if ls else 0)
+        if idx > 0:
+            seg = win[idx:]
+    if seg:
+        sv = sum(b[5] for b in seg)
+        if sv > 0:
+            f.vwap = sum(b[4] * b[5] for b in seg) / sv
+    return f
+
+
 def _enrich(best, kl, kl4, i, cfg):
     b1 = R._dictify(kl[best.symbol][max(0, i - 30):i + 1])
     best.features.atr = features._wilder_atr(b1, int(cfg.get("atr_period", 14)))
@@ -413,7 +442,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         # (the legacy count cap is folded into `blocked` above so preemption can act on it)
         # corr_budget > 0: the weighted gate is applied below, once the candidate
         # symbol+side is known (it depends on which name we'd actually open).
-        lead = R.recon_features(leader, kl[leader][i - 24:i + 1])
+        lead = _recon(leader, kl[leader][i - 24:i + 1], cfg)
         reg = scoring.regime(lead, None, cfg)
         if reg.direction not in ("long", "short"):
             continue
@@ -423,7 +452,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             if er is not None and er < er_floor:
                 n_chop_block += 1
                 continue
-        feats = [R.recon_features(s, kl[s][i - 24:i + 1]) for s in syms if s not in owned]
+        feats = [_recon(s, kl[s][i - 24:i + 1], cfg) for s in syms if s not in owned]
         scored = scoring.score_universe(feats, lead, cfg, reg.direction, allow_breakout=use_breakout)
         qual = [s for s in scored if not s.skip and s.score >= min_score]
         if not pb_on:  # v0.9.22: universe runs pullback-off -> breakout entries only
