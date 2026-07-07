@@ -1,6 +1,6 @@
 # RUNECLAW Live Operations Reference
 
-Current as of **v0.9.33** (manifest.yaml). This is a living reference for
+Current as of **v0.9.34** (manifest.yaml). This is a living reference for
 reading live SITREPs and the compact SCAN line without re-deriving mechanics
 from source each time. **The repo is always the source of truth** — if this
 doc and `manifest.yaml` / `src/*.py` ever disagree, trust the code and flag
@@ -176,6 +176,12 @@ visible without that cycle's live funding/trend data.
     (`score_w_*`) defaulting to the legacy split — built for **ablation**
     ("does this signal earn its weight?"), not tuning. Hard disqualifiers
     (walls, thin volume, no VWAP) are not weights and hold at any setting.
+13. Swing structure + candle reads (v0.9.34): `features.swing_points` finds
+    confirmed pivots (k=3 bar lag, no repainting) in the 1h bars already
+    fetched; `SymbolFeatures` carries `swing_high/swing_low/structure_dir/
+    candle_veto_*`. Four opt-in consumer gates exist but **all four were
+    swept and killed** (§7) — the fields flow, nothing acts on them by
+    default. They remain available as card-tunable ablation hooks.
 
 ---
 
@@ -288,7 +294,7 @@ margin   = notional / leverage                              # then capped by mar
 
 ---
 
-## 5. Current live parameter reference (v0.9.33)
+## 5. Current live parameter reference (v0.9.34)
 
 | Parameter | Value | manifest.yaml |
 |---|---|---|
@@ -316,6 +322,8 @@ margin   = notional / leverage                              # then capped by mar
 | `regime_chg_deadzone_pct` | **0.3** (v0.9.32, swept 9/9; vwap dz KILLED) | regime block |
 | `regime_taker_vote` | 1 (parity toggle; "0" = replay-validated 2-vote gate) | regime block |
 | `score_w_*` (5 dims) | legacy 25/20/20/20/15 (ablation keys, v0.9.33) | scoring block |
+| `swing_k` | 3 (pivot confirmation bars, v0.9.34) | v0.9.34 block |
+| structure/candle gates (4) | **all "0" — swept and KILLED** (v0.9.34, see §7) | v0.9.34 block |
 | `time_stop_hours` | **12** (unconditional; breakout + unknown-mode cap) | :225 |
 | `pullback_time_stop_hours` | **4** (unconditional; v0.9.22 per-mode cap) | v0.9.22 block |
 | `pullback_tp2_pct` | 22 (mode marker; replay-proven inert) | v0.9.22 block |
@@ -352,6 +360,10 @@ Don't re-litigate these — they were settled with replay data, not vibes.
 | v0.9.20/21 vol-regime gate (`vol_ceiling`) | **SHIPPED then disabled by default** | Validated on replay's 14-symbol default (capped DD, net up) — but on the live 28-symbol universe it **halves net every window** for ~6pt DD relief. The high-vol alts it refuses (PEPE/SHIB/LAB class) are the *winners* live, not the drawdown drivers. Classic cross-universe calibration trap: don't trust a validation run on a smaller/different symbol set than what's actually live. Mechanism retained, opt-in via `vol_ceiling > 0`. |
 | `sl_min_alt` widening | **KILLED** | Overfit — failed the 21d out-of-sample window. |
 | `trend_norm` retune | **Held back** | +16pt effect was implausibly large for the mechanism; not shipped pending further scrutiny. |
+| `pullback_structure_stop` (v0.9.34) | **KILLED** | Pivot-anchored stops lose −2.7/−2.7/−2.5pt across 21/35/42d, PF down in all three. Tighter "real structure" stops tag out pullbacks the rolling 24h anchor survives — same lesson as the stop buffer, opposite direction: the 24h extreme is fine. |
+| `breakout_structure_confirm` (v0.9.34) | **KILLED** | Inert at 21d, −11.8/−11.7pt at 35/42d. The trades it filters (rolling-extreme break before the last pivot breaks) were net winners — early is where the breakout money is. |
+| `structure_trend_veto` (v0.9.34) | **KILLED decisively** | −11.6/−16.0/−17.9pt, PF 2.55→1.61 at 21d, DD worse. Counter-structure entry *is* the strategy — a pullback limit buys against falling 1h structure by construction. |
+| `candle_veto` (v0.9.34) | **KILLED** (all-windows rule) | −7.4/−2.6/−7.3pt net. Noted, not armed: the breakout side *improves* in every window (win% 70/76/75 → 78/83/80; 35d PF 3.81) — counter-candles hurt continuation but are exactly the bar a pullback limit wants. A breakout-scoped variant projects flat at 21d, so it doesn't clear the bar. |
 
 **Lesson driving both the vol-gate reversal and this doc existing:** replay's
 *default* symbol set (14 crypto majors) is materially different from what's
