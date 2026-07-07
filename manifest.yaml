@@ -308,6 +308,18 @@ strategy_config:
   # that score is a THRESHOLD, not a magnitude: the 70-75 floor-grazers carry
   # a disproportionate share of the net (same fact behind the min_score-75
   # catastrophe and the flat weight ablations). Do not size by score.
+  # v0.9.37 per-universe OOS validation (21/35/42d, own leaders):
+  #   equities (QQQ-led, breakout-only, ext 2.5) DEFENDED: +13.6/+21.5/+30.9,
+  #     PF 2.08/2.20/2.73, maxDD never past -4.6 -- earns its slot cleanly.
+  #   metals (XAU-led, XAG) NO EVIDENCE EITHER WAY: zero entries in 42d of
+  #     replay because the harness's degraded order-book fallback caps XAG at
+  #     ~68 (live prints 72q with a real book). Metals is UNVALIDATABLE
+  #     offline -- it rides on live results only; revisit if live XAG trades
+  #     accumulate a losing record.
+  # v0.9.37 funding-as-signal: adjudicated WITHOUT a build -- research/funding.py
+  # history shows funding on this universe sits far from the 30bps gate at all
+  # times (the gate has never fired live). A signal with no dynamic range has
+  # nothing to trade on; not built, not worth the code.
   # (Equities min_score 80/85 swept in the same run: KILLED -- net collapses
   #  22.5->8.8 / 31.9->8.8; the small-universe score inflation is real but
   #  harmless, the 70-floor trades are profitable. Stays 70.)
