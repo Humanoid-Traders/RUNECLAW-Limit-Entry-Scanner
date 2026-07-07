@@ -294,6 +294,25 @@ def enrich_score(scored: Scored, feats: SymbolFeatures, cfg: dict) -> tuple:
     extra["trend_dir"] = feats.trend_dir
     extra["trend_adj"] = round(trend_adj, 2)
 
+    # --- v0.9.34 structure gates (opt-in, default off; data from features'
+    # swing/candle engine, populated in enrich and mirrored in the harness):
+    #  structure_trend_veto -- skip a candidate whose HH/HL-vs-LH/LL structure
+    #    OPPOSES its side (a long into LH+LL structure). Neutral structure never
+    #    vetoes (fail-open).
+    #  candle_veto -- skip when the last CLOSED entry-TF bar is a counter-candle
+    #    (doji at the would-be entry, or an engulfing bar against the side).
+    if not skip and str(cfg.get("structure_trend_veto", "0")).strip().lower() in ("1", "true", "yes"):
+        sdir = getattr(feats, "structure_dir", "neutral")
+        opposed = "short" if side == "long" else "long"
+        extra["structure_dir"] = sdir
+        if sdir == opposed:
+            skip, reason = True, "structure_opposed"
+    if not skip and str(cfg.get("candle_veto", "0")).strip().lower() in ("1", "true", "yes"):
+        cv = getattr(feats, "candle_veto_long" if side == "long" else "candle_veto_short", "")
+        if cv:
+            extra["candle_veto"] = cv
+            skip, reason = True, "candle_" + cv
+
     # --- v0.5.0 breakout confirmation: a breakout-tagged candidate is only real if
     # the higher-TF trend is strong AND aligned AND price sits at the session
     # extreme. Otherwise it is just an overextended blip -> demote to no-trade.
@@ -310,7 +329,20 @@ def enrich_score(scored: Scored, feats: SymbolFeatures, cfg: dict) -> tuple:
                 near_extreme = feats.last <= feats.low * (1.0 + band)
         extra["breakout_aligned"] = aligned
         extra["breakout_near_extreme"] = near_extreme
-        if not (aligned and near_extreme):
+        # v0.9.34 opt-in third condition -- breakout_structure_confirm: the move
+        # must ALSO have broken the last CONFIRMED swing point (a break of real
+        # structure, not just proximity to a rolling 24h extreme). Fail-open when
+        # no swing is available (thin bars must never silently kill breakouts).
+        struct_ok = True
+        if str(cfg.get("breakout_structure_confirm", "0")).strip().lower() in ("1", "true", "yes"):
+            if side == "long":
+                sw = getattr(feats, "swing_high", None)
+                struct_ok = (sw is None) or (feats.last is not None and feats.last > sw)
+            else:
+                sw = getattr(feats, "swing_low", None)
+                struct_ok = (sw is None) or (feats.last is not None and feats.last < sw)
+            extra["breakout_structure_ok"] = struct_ok
+        if not (aligned and near_extreme and struct_ok):
             skip, reason = True, "breakout_unconfirmed"
 
     # --- funding: skip into a crowded extreme, soft-penalize milder adverse funding.

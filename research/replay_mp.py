@@ -137,6 +137,17 @@ def _enrich(best, kl, kl4, i, cfg):
     td, ts = R.trend_4h(kl4.get(best.symbol, []), kl[best.symbol][i][0],
                         int(cfg.get("trend_lookback", 12)), float(cfg.get("trend_norm", "0.05")))
     best.features.trend_dir, best.features.trend_strength = td, ts
+    # v0.9.34 parity: populate the swing/candle fields exactly as live enrich()
+    # does, from the same trailing closed-bar window, using the SAME functions --
+    # so the opt-in consumers in scoring/risk sweep the exact live logic.
+    try:
+        _sk = int(cfg.get("swing_k", 3))
+    except (TypeError, ValueError):
+        _sk = 3
+    (best.features.swing_high, best.features.swing_low,
+     best.features.structure_dir) = features.structure_read(b1, _sk)
+    best.features.candle_veto_long = features.candle_veto(b1, "long")
+    best.features.candle_veto_short = features.candle_veto(b1, "short")
     _, _, skip, reason = scoring.enrich_score(best, best.features, cfg)
     return skip
 
