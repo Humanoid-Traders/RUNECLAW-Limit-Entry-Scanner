@@ -159,6 +159,24 @@ def _recon(sym, win, cfg):
     return f
 
 
+def _missed(kl, q, i, kind):
+    """Opportunity record for an unfilled limit cancelled at bar i (chase-cancel or
+    4h expiry): the SIGNAL-direction move from the price at posting (post_px) to
+    (a) the cancel bar and (b) 12h after posting (the breakout-class hold the
+    signal would have ridden if entered at market instead of resting a limit).
+    Positive = the thesis was RIGHT and the limit missed it; negative = the
+    limit's non-fill dodged a loser. Pure diagnosis -- feeds the fill-rate audit,
+    changes no behaviour."""
+    sym = q["sym"]; px0 = q.get("post_px") or q["entry"]
+    sgn = 1.0 if q["side"] == "long" else -1.0
+    now = kl[sym][i][4]
+    j = min(q["placed_i"] + 12, len(kl[sym]) - 1)
+    fwd12 = kl[sym][j][4]
+    return {"sym": sym, "side": q["side"], "kind": kind, "score": q.get("score", 0.0),
+            "mv_cancel": sgn * (now - px0) / px0 * 100.0,
+            "mv_12h": sgn * (fwd12 - px0) / px0 * 100.0}
+
+
 def _enrich(best, kl, kl4, i, cfg):
     b1 = R._dictify(kl[best.symbol][max(0, i - 30):i + 1])
     best.features.atr = features._wilder_atr(b1, int(cfg.get("atr_period", 14)))
@@ -311,6 +329,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     opens = []   # {sym, side, mode, fill_px, sl, tp1, atr, fill_i, hw, trail}
     pends = []   # {sym, side, entry, placed_i, plan}
     trades = []; n_sig = 0; n_chase = 0; n_expire = 0; n_fill = 0
+    missed = []   # unfilled-limit opportunity record: signal-direction move post->cancel
     n_corr_block = 0; n_heat_block = 0; n_loss_block = 0; n_chop_block = 0; n_preempt = 0
 
     def close(p, px, why, at):
@@ -398,8 +417,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                               "score": q.get("score", 0.0)})
                 continue
             run = ((c - q["entry"]) / q["entry"]) if long else ((q["entry"] - c) / q["entry"])
-            if run > chase: n_chase += 1; continue
-            if (i - q["placed_i"]) >= expiry: n_expire += 1; continue
+            if run > chase: n_chase += 1; missed.append(_missed(kl, q, i, "chase")); continue
+            if (i - q["placed_i"]) >= expiry: n_expire += 1; missed.append(_missed(kl, q, i, "expire")); continue
             keepp.append(q)
         pends = keepp
 
@@ -506,7 +525,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     if gap > chase:
                         continue
                     pends.append({"sym": cand.symbol, "side": cand.side, "entry": plan.entry,
-                                  "placed_i": i, "plan": plan, "score": cand.score})
+                                  "placed_i": i, "plan": plan, "score": cand.score,
+                                  "post_px": kl[cand.symbol][i][4]})
             continue
         best = qual[0]
         # v0.8.0: correlation-weighted exposure gate (depends on the candidate).
@@ -550,7 +570,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             if gap > chase:
                 continue  # pre-placement staleness skip (entry_too_far)
             pends.append({"sym": best.symbol, "side": best.side, "entry": plan.entry,
-                          "placed_i": i, "plan": plan, "score": best.score})
+                          "placed_i": i, "plan": plan, "score": best.score,
+                          "post_px": kl[best.symbol][i][4]})
 
     # force-close any still-open positions at the last bar so stats are unbiased
     last = n - 1
@@ -558,6 +579,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         close(p, kl[p["sym"]][last][4], "eow", last)
 
     return {"n_sig": n_sig, "n_fill": n_fill, "n_chase": n_chase, "n_expire": n_expire,
+            "missed": missed,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
             "n_preempt": n_preempt, "trades": trades, "max_open": max_conc}
@@ -571,6 +593,13 @@ def report(tag, st):
           f"corr-block: {st.get('n_corr_block', 0)}   heat-block: {st.get('n_heat_block', 0)}   "
           f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}   "
           f"preempt: {st.get('n_preempt', 0)}")
+    ms = st.get("missed") or []
+    if ms:
+        mc = [m["mv_cancel"] for m in ms]; m12 = [m["mv_12h"] for m in ms]
+        fav = sum(1 for v in m12 if v > 1.0); dodge = sum(1 for v in m12 if v < -1.0)
+        print(f"  missed limits   : {len(ms)}  (avg move post->cancel {sum(mc)/len(mc):+.2f}%,"
+              f" post->+12h {sum(m12)/len(m12):+.2f}%; {fav} were >+1% winners missed,"
+              f" {dodge} were <-1% losers dodged)")
     print(f"  trades closed   : {len(t)}  (incl. forced end-of-window closes)")
     if not t:
         return
