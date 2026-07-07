@@ -95,6 +95,17 @@ strategy_config:
   min_volume_usdt: "10000000"
   # atr_limit_mult DEFENDED both ways (2026-07-06 sweep, 35d): 0.2 and 0.5 both
   # fail to beat 0.3 on net+PF.
+  # v0.9.37 fill-rate audit + market-entry probe (research-side, 21/35/42d):
+  # ~85% of posted pullback limits never fill and the misses lean 2:1 toward
+  # missed winners (+0.6% avg 12h thesis-direction drift) -- yet taking the
+  # SAME signals at MARKET instead (pullback_market_entry=1 in replay_mp) is
+  # KILLED DECISIVELY: per-trade edge collapses +0.46% -> +0.08%, win% 62->47,
+  # PF 2.55/3.44/2.90 -> 1.46/1.96/1.78, net down in every window. The
+  # dip-to-fill requirement IS the edge filter (adverse-selection protection):
+  # the ~15% of signals that fill are the ones where price actually mean-
+  # reverted. The resting-limit patience is DEFENDED with numbers -- do not
+  # re-litigate "misses trending moves that never pull back" without beating
+  # this A/B.
   atr_limit_mult: "0.3"
   # v0.9.19 -- widened 4.0 -> 5.0 by the structural sweep (OOS-verified across 21/35/42d
   # breakout windows). The overextension cap doubles as the breakout-routing trigger:

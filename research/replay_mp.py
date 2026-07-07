@@ -332,14 +332,28 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     missed = []   # unfilled-limit opportunity record: signal-direction move post->cancel
     n_corr_block = 0; n_heat_block = 0; n_loss_block = 0; n_chop_block = 0; n_preempt = 0
 
+    # v0.9.37 probe -- score-weighted sizing: score_size_floor F in (0,1) scales a
+    # trade's notional weight linearly from F at score 70 to 1.0 at score >= 90,
+    # so a 90q conviction name risks full size and a 70q floor-grazer risks F of
+    # it. 0 (default) = every trade equal-weighted, the exact live behaviour
+    # (score gates but never scales). Fees scale with notional, so the whole
+    # (total - 2*fee) term is weighted.
+    try:
+        _ssf = float(cfg.get("score_size_floor", "0") or "0")
+    except (TypeError, ValueError):
+        _ssf = 0.0
+
     def close(p, px, why, at):
         long = p["side"] == "long"
         r = ((px - p["fill_px"]) / p["fill_px"]) if long else ((p["fill_px"] - px) / p["fill_px"])
         # blend any scale-out leg banked at tp1 with the remainder's exit; exit
         # fees split pro-rata across the legs, so the total stays 2*fee.
         total = p.get("banked", 0.0) + p.get("w", 1.0) * r
+        szw = 1.0
+        if 0.0 < _ssf < 1.0:
+            szw = _ssf + (1.0 - _ssf) * min(max((p.get("score", 70.0) - 70.0) / 20.0, 0.0), 1.0)
         trades.append({"sym": p["sym"], "side": p["side"], "mode": p["mode"],
-                       "ret_pct": round((total - 2 * fee) * 100, 3), "reason": why, "exit_i": at})
+                       "ret_pct": round(szw * (total - 2 * fee) * 100, 3), "reason": why, "exit_i": at})
 
     for i in range(25, n - 1):
         # 1) manage open positions
@@ -569,6 +583,20 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             gap = ((plan.entry - cur) / plan.entry) if best.side == "short" else ((cur - plan.entry) / plan.entry)
             if gap > chase:
                 continue  # pre-placement staleness skip (entry_too_far)
+            # v0.9.37 probe -- pullback_market_entry=1: take the SAME pullback
+            # signal at MARKET (bar close) instead of resting a limit, rescaling
+            # the plan geometry onto the actual fill (sl/tp keep their % width).
+            # Trades the vwap-0.3*ATR price improvement for the ~85% of signals
+            # the limit never fills (fill-rate audit, 2026-07-07).
+            if str(cfg.get("pullback_market_entry", "0")).strip() in ("1", "true"):
+                c0 = kl[best.symbol][i][4]
+                r0 = c0 / plan.entry if plan.entry else 1.0
+                opens.append({"sym": best.symbol, "side": best.side, "mode": "pullback",
+                              "fill_px": c0, "sl": plan.sl_price * r0,
+                              "tp1": plan.tp1 * r0, "tp2": plan.tp2 * r0,
+                              "atr": plan.atr or 0.0, "fill_i": i, "hw": c0,
+                              "trail": plan.sl_price * r0, "score": best.score})
+                continue
             pends.append({"sym": best.symbol, "side": best.side, "entry": plan.entry,
                           "placed_i": i, "plan": plan, "score": best.score,
                           "post_px": kl[best.symbol][i][4]})
