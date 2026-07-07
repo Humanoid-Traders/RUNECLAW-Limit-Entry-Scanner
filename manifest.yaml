@@ -275,6 +275,22 @@ strategy_config:
   #               window. The VWAP razor edge is load-bearing (it is the
   #               system's entry anchor) -- do not soften it. Keep 0.
   #   both     -- inherits the vwap poison; killed with it.
+  # v0.9.35 anchored-VWAP probe (research-side vwap_anchor knob, replay_mp
+  # _recon; never shipped to src). Re-anchoring the VWAP itself, 21/35/42d
+  # vs rolling baseline +25.9/+84.7/+83.2, PF 2.55/3.36/2.85, DD -15.4:
+  #   swing-anchored -- KILLED CATASTROPHICALLY: +6.0/+47.5/+40.8, PF down to
+  #               1.13/1.61/1.47, maxDD -25.7/-25.7/-26.1. A pivot-anchored
+  #               VWAP whipsaws the anchor every confirmation and poisons all
+  #               four consumers at once.
+  #   day (UTC)  -- KILLED on the all-windows net rule (-1.5/-9.8/-0.7pt, PF
+  #               down in all three) BUT documented as the system's best
+  #               DEFENSIVE profile yet: maxDD -15.4 -> -7.9/-7.9/-9.1 (nearly
+  #               halved) because the day anchor hugs price, doubling pullback
+  #               fills at half the per-trade edge. If live risk appetite ever
+  #               drops, vwap_anchor=day in replay is the first thing to
+  #               re-examine -- NOT armed.
+  # Verdict: the rolling 24h VWAP is defended a second time (dead-zone sweep
+  # killed softening it; this killed re-anchoring it). It stays the anchor.
   # (Equities min_score 80/85 swept in the same run: KILLED -- net collapses
   #  22.5->8.8 / 31.9->8.8; the small-universe score inflation is real but
   #  harmless, the 70-floor trades are profitable. Stays 70.)
