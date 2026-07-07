@@ -1,6 +1,6 @@
 # RUNECLAW Live Operations Reference
 
-Current as of **v0.9.34** (manifest.yaml). This is a living reference for
+Current as of **v0.9.36** (manifest.yaml). This is a living reference for
 reading live SITREPs and the compact SCAN line without re-deriving mechanics
 from source each time. **The repo is always the source of truth** — if this
 doc and `manifest.yaml` / `src/*.py` ever disagree, trust the code and flag
@@ -52,9 +52,14 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   bot's size is invisible to this count by design.
 - `nof-` prefix = this cycle ran with `is_follow_trade() == False` (an
   eval/pre-window cycle, not live follow-trade management).
-- Breaker token `b?` / `b+n` / `b-n` = realized-loss breaker state; `b?` means
-  the trailing-window realized PnL couldn't be computed this cycle (thin
-  window), not a balance query.
+- Breaker token = realized-loss breaker state: `b<n>` armed with ~$n of
+  further realized loss to the trip; `b!<n>` tripped, ~$n past the threshold;
+  `b?<stage>` armed but **blind** this cycle, with the failing stage named —
+  `r` fills read failed, `t` no row timestamp parsed, `k` no recognised
+  profit field, `e` fills read **empty on a state-blind cycle** (v0.9.36 —
+  "empty" is untrustworthy while sibling reads fail; healthy-cycle empty
+  reads full headroom `b<threshold>`, not blind). Under the 63-char budget
+  the token degrades gracefully: full → 4-char stage form → dropped.
 - `cx` suffix = circuit-breaker note, when present.
 
 ### Tail priority chain (`_dbg_tail`, `src/main_live.py:620-648`) — first match wins
@@ -294,7 +299,7 @@ margin   = notional / leverage                              # then capped by mar
 
 ---
 
-## 5. Current live parameter reference (v0.9.34)
+## 5. Current live parameter reference (v0.9.36)
 
 | Parameter | Value | manifest.yaml |
 |---|---|---|
