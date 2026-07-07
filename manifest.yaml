@@ -313,15 +313,36 @@ strategy_config:
   # structure_read / candle_veto, computed from the closed entry-TF bars already
   # fetched -- zero extra calls; harness populates identically for parity). The
   # system's only prior "structure" was the ROLLING 24h high/low. Four opt-in
-  # consumers, ALL default off pending the sweep:
+  # consumers -- SWEPT solo on the joint live baseline (loss_pause 3 + chg dz
+  # 0.3), 21/35/42d OOS, baseline +25.9/PF2.55, +84.7/3.36, +83.2/2.85.
+  # ALL FOUR KILLED (net loser in every window; keys stay as ablation hooks):
   #   pullback_structure_stop   -- stop beyond the last CONFIRMED pivot instead
-  #                                of the rolling 24h extreme (sl_min still floors)
+  #                                of the rolling 24h extreme (sl_min still floors).
+  #                                KILLED: -2.7/-2.7/-2.5pt, PF down in all 3.
+  #                                Tighter pivot stops tag out pullbacks the 24h
+  #                                anchor survives (same lesson as the buffer,
+  #                                opposite direction: the 24h extreme is FINE).
   #   breakout_structure_confirm-- breakout must also BREAK the last pivot, not
-  #                                just sit near a rolling extreme
+  #                                just sit near a rolling extreme. KILLED: 21d
+  #                                inert, -11.8/-11.7pt at 35/42d -- the 8 extra
+  #                                trades it filters were NET WINNERS (a rolling-
+  #                                extreme break that hasn't broken the last pivot
+  #                                yet is early, and early is where the money is).
   #   structure_trend_veto      -- skip candidates whose HH/HL-vs-LH/LL structure
-  #                                opposes their side (neutral never vetoes)
+  #                                opposes their side. KILLED DECISIVELY:
+  #                                -11.6/-16.0/-17.9pt, PF 2.55->1.61 at 21d, DD
+  #                                worse. Counter-structure entries are the
+  #                                strategy (pullback = buying vs falling 1h
+  #                                structure by construction).
   #   candle_veto               -- skip on a counter-candle last closed bar
-  #                                (doji / engulfing-against-side)
+  #                                (doji / engulfing-against-side). KILLED on the
+  #                                all-windows rule: -7.4/-2.6/-7.3pt net. NOTED,
+  #                                not armed: the breakout SIDE improves in every
+  #                                window (win% 70/76/75 -> 78/83/80, 35d PF 3.81)
+  #                                -- a counter-candle is bad for continuation but
+  #                                is exactly the bar a pullback limit WANTS; a
+  #                                breakout-scoped variant projects flat at 21d
+  #                                (+25.7 vs +25.9), so it doesn't clear the bar.
   swing_k: 3
   pullback_structure_stop: "0"
   breakout_structure_confirm: "0"
