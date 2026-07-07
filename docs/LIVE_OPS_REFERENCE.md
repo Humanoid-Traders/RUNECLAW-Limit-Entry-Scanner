@@ -1,6 +1,6 @@
 # RUNECLAW Live Operations Reference
 
-Current as of **v0.9.34** (manifest.yaml). This is a living reference for
+Current as of **v0.9.36** (manifest.yaml). This is a living reference for
 reading live SITREPs and the compact SCAN line without re-deriving mechanics
 from source each time. **The repo is always the source of truth** — if this
 doc and `manifest.yaml` / `src/*.py` ever disagree, trust the code and flag
@@ -52,9 +52,14 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   bot's size is invisible to this count by design.
 - `nof-` prefix = this cycle ran with `is_follow_trade() == False` (an
   eval/pre-window cycle, not live follow-trade management).
-- Breaker token `b?` / `b+n` / `b-n` = realized-loss breaker state; `b?` means
-  the trailing-window realized PnL couldn't be computed this cycle (thin
-  window), not a balance query.
+- Breaker token = realized-loss breaker state: `b<n>` armed with ~$n of
+  further realized loss to the trip; `b!<n>` tripped, ~$n past the threshold;
+  `b?<stage>` armed but **blind** this cycle, with the failing stage named —
+  `r` fills read failed, `t` no row timestamp parsed, `k` no recognised
+  profit field, `e` fills read **empty on a state-blind cycle** (v0.9.36 —
+  "empty" is untrustworthy while sibling reads fail; healthy-cycle empty
+  reads full headroom `b<threshold>`, not blind). Under the 63-char budget
+  the token degrades gracefully: full → 4-char stage form → dropped.
 - `cx` suffix = circuit-breaker note, when present.
 
 ### Tail priority chain (`_dbg_tail`, `src/main_live.py:620-648`) — first match wins
@@ -294,7 +299,7 @@ margin   = notional / leverage                              # then capped by mar
 
 ---
 
-## 5. Current live parameter reference (v0.9.34)
+## 5. Current live parameter reference (v0.9.36)
 
 | Parameter | Value | manifest.yaml |
 |---|---|---|
@@ -363,6 +368,11 @@ Don't re-litigate these — they were settled with replay data, not vibes.
 | `pullback_structure_stop` (v0.9.34) | **KILLED** | Pivot-anchored stops lose −2.7/−2.7/−2.5pt across 21/35/42d, PF down in all three. Tighter "real structure" stops tag out pullbacks the rolling 24h anchor survives — same lesson as the stop buffer, opposite direction: the 24h extreme is fine. |
 | `breakout_structure_confirm` (v0.9.34) | **KILLED** | Inert at 21d, −11.8/−11.7pt at 35/42d. The trades it filters (rolling-extreme break before the last pivot breaks) were net winners — early is where the breakout money is. |
 | `structure_trend_veto` (v0.9.34) | **KILLED decisively** | −11.6/−16.0/−17.9pt, PF 2.55→1.61 at 21d, DD worse. Counter-structure entry *is* the strategy — a pullback limit buys against falling 1h structure by construction. |
+| equities universe (v0.9.37 OOS validation) | **DEFENDED** | QQQ-led breakout-only: +13.6/+21.5/+30.9, PF 2.08/2.20/2.73, maxDD ≤ −4.6 across 21/35/42d. Earns its slot. |
+| metals universe (v0.9.37) | **No evidence — unvalidatable offline** | Zero replay entries in 42d: the harness's degraded order-book fallback caps XAG at ~68 (live prints 72q with a real book). Rides on live results only. |
+| funding-as-signal (v0.9.37) | **Not built** | funding.py history: this universe never approaches the 30bps gate — no dynamic range, nothing to trade on. Adjudicated without code. |
+| score-weighted sizing (v0.9.37 probe) | **KILLED** | Floor 0.7 at score 70 → full at 90: net −4.3/−18.5/−21.5pt for ~4pt DD relief. Third confirmation that score is a threshold, not a magnitude — the 70–75 floor-grazers carry the net. Do not size by score. |
+| pullback market entry (v0.9.37 probe) | **KILLED decisively** | Fill-rate audit: ~85% of pullback limits never fill, misses 2:1 missed-winners. But taking the same signals at market guts the edge: per-trade +0.46%→+0.08%, win% 62→47, PF 2.55/3.44/2.90 → 1.46/1.96/1.78. The dip-to-fill requirement IS the filter — patience defended with numbers. |
 | anchored VWAP, swing pivot (v0.9.35 probe) | **KILLED decisively** | +6.0/+47.5/+40.8 net vs +25.9/+84.7/+83.2, PF 1.13–1.61, maxDD −25.7. Pivot-anchored VWAP whipsaws on every confirmation and poisons all four VWAP consumers at once. Research-side probe only, never shipped. |
 | anchored VWAP, UTC day (v0.9.35 probe) | **KILLED** (net rule) — noted as best defensive profile | −1.5/−9.8/−0.7pt net, PF down — but maxDD nearly halves (−15.4 → −7.9/−7.9/−9.1): the day anchor hugs price, doubling pullback fills at half the per-trade edge. First thing to re-examine if risk appetite ever drops. |
 | `candle_veto` (v0.9.34) | **KILLED** (all-windows rule) | −7.4/−2.6/−7.3pt net. Noted, not armed: the breakout side *improves* in every window (win% 70/76/75 → 78/83/80; 35d PF 3.81) — counter-candles hurt continuation but are exactly the bar a pullback limit wants. A breakout-scoped variant projects flat at 21d, so it doesn't clear the bar. |

@@ -38,7 +38,8 @@ LIVE_SYMS = ("BTCUSDT ETHUSDT SOLUSDT LABUSDT ZECUSDT XRPUSDT DOGEUSDT TAOUSDT "
 LIVE_BASE = ("--exit-mode trail --trail 2.0 --time-stop 12 --be-lock 1.5 "
              "--steplock 2:1.5,4:3,6:4.5 --scaleout 0.35").split()
 LIVE_SET = ("tp2_pct=20,breakout_trend_min=0.7,max_vwap_ext_pct=5.0,"
-            "pullback_time_stop_hours=4,pullback_tp2_pct=22")
+            "pullback_time_stop_hours=4,pullback_tp2_pct=22,"
+            "loss_pause_pct=3,regime_chg_deadzone_pct=0.3")  # joint baseline since v0.9.32
 
 
 def read_fills(path):
