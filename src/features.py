@@ -88,6 +88,12 @@ class SymbolFeatures:
     funding_now: Optional[float] = None
     funding_avg: Optional[float] = None
     funding_ok: bool = False
+    # v0.9.34 swing-structure engine (populated by enrich(); consumers opt-in)
+    swing_high: Optional[float] = None   # most recent CONFIRMED pivot high (lags k bars)
+    swing_low: Optional[float] = None    # most recent CONFIRMED pivot low
+    structure_dir: str = "neutral"       # HH+HL -> "long", LH+LL -> "short", else neutral
+    candle_veto_long: str = ""           # counter-candle on the last closed bar vs a LONG
+    candle_veto_short: str = ""          # ... vs a SHORT ("" = clean)
 
 
 def fetch_symbol(symbol: str, exchange: str = "bitget") -> SymbolFeatures:
@@ -143,6 +149,7 @@ def taker_buy_ratio(symbol: str, exchange: str = "bitget") -> Optional[float]:
 _BAR_H = ("high", "h", "high_price")
 _BAR_L = ("low", "l", "low_price")
 _BAR_C = ("close", "c", "close_price")
+_BAR_O = ("open", "o", "open_price")          # v0.9.34: candle-pattern inputs
 _BAR_T = ("timestamp", "t", "time", "date", "ts", "start_time")
 
 
@@ -246,6 +253,88 @@ def realized_vol(bars: list, lookback: int = 30, ppy: int = 8760) -> Optional[fl
     m = sum(rets) / len(rets)
     var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
     return (var ** 0.5) * (ppy ** 0.5) * 100.0
+
+
+# --- v0.9.34 swing-structure + candle engine (pure, closed-bars-in) ----------
+# The system's only "structure" was the ROLLING 24h high/low -- a window that
+# shifts as old extremes age out, and the most crowded stop anchor on the chart
+# (the live $1804.00 stop vs the $1804.37 swing top). These pure functions add
+# real pivots. Data is computed unconditionally in enrich() (the bars are
+# already in hand); every CONSUMER is a separate opt-in cfg gate, default off.
+
+def swing_points(bars: list, k: int = 3) -> tuple:
+    """Confirmed pivot highs/lows from CLOSED bars: bar i is a swing high when
+    its high is the maximum of the 2k+1 bars centred on i (strictly greater
+    than all k bars after it, >= the k before, so flat-top ties confirm on the
+    LAST touch). Mirrored for lows. A pivot needs k closing bars after it, so
+    confirmation lags k bars by construction -- that lag is the point: an
+    unconfirmed extreme is just the current price. Returns (highs, lows) as
+    [(index, price), ...] oldest->newest."""
+    highs, lows = [], []
+    n = len(bars)
+    if n < 2 * k + 1 or k < 1:
+        return (highs, lows)
+    hs = [_bar_f(b, _BAR_H) for b in bars]
+    ls = [_bar_f(b, _BAR_L) for b in bars]
+    for i in range(k, n - k):
+        h, l = hs[i], ls[i]
+        if h is not None and all(x is not None for x in hs[i - k:i + k + 1]):
+            if all(h >= hs[j] for j in range(i - k, i)) \
+                    and all(h > hs[j] for j in range(i + 1, i + k + 1)):
+                highs.append((i, h))
+        if l is not None and all(x is not None for x in ls[i - k:i + k + 1]):
+            if all(l <= ls[j] for j in range(i - k, i)) \
+                    and all(l < ls[j] for j in range(i + 1, i + k + 1)):
+                lows.append((i, l))
+    return (highs, lows)
+
+
+def structure_read(bars: list, k: int = 3) -> tuple:
+    """(last_swing_high, last_swing_low, structure_dir) for enrich() to stash.
+    structure_dir needs two pivots per side: HH+HL -> 'long', LH+LL -> 'short',
+    anything mixed/insufficient -> 'neutral' (fail-neutral, never fail-directional)."""
+    highs, lows = swing_points(bars, k)
+    sh = highs[-1][1] if highs else None
+    sl = lows[-1][1] if lows else None
+    sdir = "neutral"
+    if len(highs) >= 2 and len(lows) >= 2:
+        hh = highs[-1][1] > highs[-2][1]
+        hl = lows[-1][1] > lows[-2][1]
+        lh = highs[-1][1] < highs[-2][1]
+        ll = lows[-1][1] < lows[-2][1]
+        if hh and hl:
+            sdir = "long"
+        elif lh and ll:
+            sdir = "short"
+    return (sh, sl, sdir)
+
+
+def candle_veto(bars: list, side: str, doji_body_frac: float = 0.15) -> str:
+    """Counter-candle check on the LAST CLOSED bar for a candidate `side`.
+    Returns '' (clean) or a compact veto reason:
+      'doji'    -- body <= doji_body_frac of the bar's range (indecision at the
+                   would-be entry; direction-agnostic)
+      'engulf'  -- the last bar's body engulfs the prior bar's body AND closes
+                   against `side` (bearish engulfing vetoes a long, bullish
+                   engulfing vetoes a short).
+    Fail-open: missing open/close/range data -> '' (never blocks on bad data)."""
+    if len(bars) < 2:
+        return ""
+    o2, c2 = _bar_f(bars[-1], _BAR_O), _bar_f(bars[-1], _BAR_C)
+    h2, l2 = _bar_f(bars[-1], _BAR_H), _bar_f(bars[-1], _BAR_L)
+    o1, c1 = _bar_f(bars[-2], _BAR_O), _bar_f(bars[-2], _BAR_C)
+    if None in (o2, c2, h2, l2):
+        return ""
+    rng = h2 - l2
+    if rng > 0 and abs(c2 - o2) <= doji_body_frac * rng:
+        return "doji"
+    if None in (o1, c1):
+        return ""
+    against = (c2 < o2) if side == "long" else (c2 > o2)
+    engulfs = max(o2, c2) >= max(o1, c1) and min(o2, c2) <= min(o1, c1) and abs(c2 - o2) > abs(c1 - o1)
+    if against and engulfs:
+        return "engulf"
+    return ""
 
 
 def _ema_trend(bars: list, lookback: int, norm: float) -> tuple:
@@ -457,6 +546,18 @@ def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> Symbol
     t_bars = bars if t_int == k_int else _closed_bars(fetch_klines(
         feats.symbol, interval=t_int, limit=max(t_look + 5, 20), exchange=exchange), t_int)
     feats.trend_dir, feats.trend_strength = _ema_trend(t_bars, t_look, t_norm)
+
+    # v0.9.34: swing structure + candle read from the SAME closed entry-TF bars
+    # (zero extra fetches). Data always populated; every consumer is a separate
+    # opt-in gate. Fail-neutral/fail-open on thin or malformed bars.
+    if bars:
+        try:
+            swing_k = int(cfg.get("swing_k", 3))
+        except (TypeError, ValueError):
+            swing_k = 3
+        feats.swing_high, feats.swing_low, feats.structure_dir = structure_read(bars, swing_k)
+        feats.candle_veto_long = candle_veto(bars, "long")
+        feats.candle_veto_short = candle_veto(bars, "short")
 
     f_int = str(cfg.get("funding_interval", "1h"))
     f_win = int(cfg.get("funding_window", 8))

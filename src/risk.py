@@ -108,7 +108,12 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
             tp2 = entry * (1.0 + tp2_pct)
             breakeven_price = entry * (1.0 + be_pct)
     elif side == "short":
-        # v0.9.28 candidate -- pullback_stop_buffer_pct: pad the structural stop
+        # v0.9.34 opt-in -- pullback_structure_stop: anchor the stop beyond the
+        # last CONFIRMED swing point (features.swing_points) instead of the
+        # rolling 24h extreme. The 24h window shifts as old prints age out and
+        # is the most crowded anchor on the chart; a confirmed pivot is real
+        # structure. Fail-open: no swing available -> the 24h extreme as before.
+        # sl_min floor applies regardless (a too-tight swing never under-stops).
         # BEYOND the 24h extreme instead of sitting exactly ON it. The raw pullback
         # stop is the most crowded, most-hunted price on the chart (live 2026-07-06:
         # ETH short SL $1804.00, swing top $1804.37 -- tagged by 37 cents, then a
@@ -124,7 +129,12 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
         entry = vwap + atr_mult * atr
         if entry <= 0:
             return None
-        struct = high * (1.0 + pb_buf)
+        anchor = high
+        if str(cfg.get("pullback_structure_stop", "0")).strip().lower() in ("1", "true", "yes"):
+            swing = getattr(feats, "swing_high", None)
+            if swing is not None and swing > 0:
+                anchor = swing
+        struct = anchor * (1.0 + pb_buf)
         raw_sl_pct = (struct - entry) / entry if struct > entry else 0.0
         sl_pct = max(raw_sl_pct, sl_min)
         sl_price = entry * (1.0 + sl_pct)
@@ -139,7 +149,12 @@ def build_plan(feats: SymbolFeatures, cfg: dict, size_factor: float, side: str =
         entry = vwap - atr_mult * atr
         if entry <= 0:
             return None
-        struct = low * (1.0 - pb_buf)
+        anchor = low
+        if str(cfg.get("pullback_structure_stop", "0")).strip().lower() in ("1", "true", "yes"):
+            swing = getattr(feats, "swing_low", None)
+            if swing is not None and swing > 0:
+                anchor = swing
+        struct = anchor * (1.0 - pb_buf)
         raw_sl_pct = (entry - struct) / entry if entry > struct else 0.0
         sl_pct = max(raw_sl_pct, sl_min)
         sl_price = entry * (1.0 - sl_pct)

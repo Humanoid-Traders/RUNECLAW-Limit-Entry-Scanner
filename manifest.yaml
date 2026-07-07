@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.33"
+version: "0.9.34"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -309,6 +309,24 @@ strategy_config:
   score_w_range: "20"
   score_w_orderbook: "20"
   score_w_volume: "15"
+  # v0.9.34 -- swing-structure + candle engine (features.swing_points /
+  # structure_read / candle_veto, computed from the closed entry-TF bars already
+  # fetched -- zero extra calls; harness populates identically for parity). The
+  # system's only prior "structure" was the ROLLING 24h high/low. Four opt-in
+  # consumers, ALL default off pending the sweep:
+  #   pullback_structure_stop   -- stop beyond the last CONFIRMED pivot instead
+  #                                of the rolling 24h extreme (sl_min still floors)
+  #   breakout_structure_confirm-- breakout must also BREAK the last pivot, not
+  #                                just sit near a rolling extreme
+  #   structure_trend_veto      -- skip candidates whose HH/HL-vs-LH/LL structure
+  #                                opposes their side (neutral never vetoes)
+  #   candle_veto               -- skip on a counter-candle last closed bar
+  #                                (doji / engulfing-against-side)
+  swing_k: 3
+  pullback_structure_stop: "0"
+  breakout_structure_confirm: "0"
+  structure_trend_veto: "0"
+  candle_veto: "0"
   time_stop_hours: "12"
   # v0.9.22 -- trade-type exit packs (per-mode keys; 0 = inherit the global rule,
   # the exact pre-v0.9.22 behaviour). Phase-1/2 replay on the LIVE 28-symbol set:
