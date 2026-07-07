@@ -275,6 +275,34 @@ def test_timestamp_key_windows():
             "'timestamp'-keyed fill windows -> realized -12")
 
 
+def test_blind_stage_empty_fills_on_degraded_cycle():
+    # v0.9.36: a SUCCESS-EMPTY fills read on a cycle whose sibling reads are
+    # blind (state_blind) must NOT be trusted as "quiet window, full headroom" --
+    # that is the fresh-subscription/bridge-outage shape where "empty" means
+    # "API layer degraded". Classify blind stage "e" -> token -b?e.
+    def _raise(**k):
+        raise RuntimeError("bridge_down")
+    cfg = _wire_state([])          # fills read: SUCCESS, zero rows
+    _trade.contract.pending_orders = _raise   # sibling read blind -> state_blind
+    st = execution.manage_open_state(cfg)
+    _assert(st.get("state_blind") is True, "degraded pending read -> state_blind")
+    _assert(st.get("realized_window_pnl") is None,
+            "empty fills on a blind cycle -> realized None (not trusted as 0)")
+    _assert(st.get("loss_breaker_blind") == "e",
+            "blind stage 'e' -> token -b?e names the degraded-cycle case")
+    _assert(st.get("loss_breaker_headroom") is None,
+            "no headroom claimed while the window is untrustworthy")
+
+
+def test_empty_fills_on_healthy_cycle_still_full_headroom():
+    # the v0.9.36 guard must not regress the v0.9.18 tell: healthy sibling
+    # reads + empty fills = genuinely quiet account = realized 0, full room.
+    cfg = _wire_state([])
+    st = execution.manage_open_state(cfg)
+    _assert(not st.get("state_blind"), "healthy cycle -> not state_blind")
+    _assert(st.get("realized_window_pnl") == 0.0, "healthy empty -> realized 0.0")
+    _assert("loss_breaker_blind" not in st, "healthy empty -> no blind stage")
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
