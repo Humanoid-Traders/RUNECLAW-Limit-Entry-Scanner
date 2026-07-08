@@ -218,6 +218,50 @@ def test_pullback_stop_buffer():
 
 
 
+def test_mode_recovery_nested_envelope():
+    # v0.9.37 (ETH-short 12h incident): the live plan_pending_orders envelope can
+    # nest rows deeper than the flat data/orders/list key-walk reaches -- the SAME
+    # SDK shape class the pT0 incident proved (execution grew _extract_rows for it).
+    # The mode reader now walks the envelope recursively; the flat walk stays as
+    # fallback for symbol-less rows.
+    plan = {"code": 0, "data": {"list": [
+        {"symbol": "CANDUSDT", "triggerPrice": 96.0},
+        {"symbol": "CANDUSDT", "triggerPrice": 122.0},
+    ]}}
+    execution.trade.contract.plan_pending_orders = lambda symbol: plan
+    cfg = {"tp2_pct": "20.0", "pullback_tp2_pct": "22.0"}
+    _assert(execution._position_entry_mode("CANDUSDT", "long", 100.0, cfg) == "pullback",
+            "nested {data:{list:[...]}} envelope -> rows found -> +22% TP -> pullback")
+
+
+def test_mode_recovery_trailed_stop_crossed_entry():
+    # v0.9.37: once the trail crosses entry, the trailed STOP sits on the PROFIT
+    # side ("the SL always sits protective" was false for winners). First-trigger-
+    # wins could read the 1.5%-wide trailed stop as the TP and refuse the width ->
+    # mode "" -> the pullback silently rode the 12h global cap (the live ETH short,
+    # 2026-07-08). The TP backstop is by construction the FARTHEST profit-side
+    # trigger -- the reader must pick it.
+    rows = [{"triggerPrice": 98.5},   # trailed stop, crossed below a short's entry
+            {"triggerPrice": 78.0}]   # the -22% pullback TP backstop
+    execution.trade.contract.plan_pending_orders = lambda symbol: rows
+    cfg = {"tp2_pct": "20.0", "pullback_tp2_pct": "22.0"}
+    _assert(execution._position_entry_mode("CANDUSDT", "short", 100.0, cfg) == "pullback",
+            "winning short: farthest profit-side trigger (TP -22%) wins over the trailed stop")
+
+
+def test_held_token_carries_mode_flag():
+    # v0.9.37: the governing hold clock is auditable from the feed -- P = pullback
+    # (4h cap), B = breakout, absent = unknown/global. A pullback position whose
+    # hld token lacks 'P' is running the WRONG clock.
+    diag = {"sym": "ETHUSDT", "move_pct": -0.5, "age_h": 5.0, "ts_ok": True,
+            "be_armed": False, "tmode": "pullback"}
+    tok = ml._held_token({"position_diag": [diag]}, {"time_stop_hours": "12"})
+    _assert(tok == "hld.ETH+0P.t5h", "tmode pullback -> 'P' flag in hld token -> " + tok)
+    diag["tmode"] = "?"
+    tok2 = ml._held_token({"position_diag": [diag]}, {"time_stop_hours": "12"})
+    _assert(tok2 == "hld.ETH+0.t5h", "unknown mode -> no clock flag (visible absence)")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

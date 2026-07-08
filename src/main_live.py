@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.36"
+ANALYSIS_VERSION = "0.9.37"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -597,6 +597,17 @@ def _held_token(mgmt: dict, cfg: dict) -> str:
         flags += "s"
     if str(d.get("trail", "")).startswith("set:"):
         flags += "r"
+    # v0.9.37 (ETH-short 12h incident): surface which HOLD CLOCK governs, from the
+    # tp2-width mode recovery -- P = pullback (4h cap), B = breakout cap, nothing =
+    # unknown/global. Mode recovery failing live was INVISIBLE (tmode sat in the
+    # metrics payload the SITREP never reads) until a pullback ran to the 12h
+    # global cap. One char here makes the clock auditable from the feed itself:
+    # a pullback position whose hld token lacks 'P' is running the WRONG clock.
+    _tm = str(d.get("tmode", "") or "")
+    if _tm == "pullback":
+        flags += "P"
+    elif _tm == "breakout":
+        flags += "B"
     # v0.9.18 fix: render the age as ".t<hours>h", NOT ".t<age>/<cap>". The cap
     # (time_stop_hours) is a fixed config constant, and appending it pushed a
     # flags-bearing held token + a full 3-universe digest to 64 chars, so the fold's
