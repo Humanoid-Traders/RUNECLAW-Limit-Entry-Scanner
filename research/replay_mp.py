@@ -238,6 +238,15 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     multislot = str(cfg.get("multislot", "")).strip().lower() not in ("", "0", "false", "no", "none")
     expiry = int(float(cfg.get("limit_expiry_hours", "4")))
     chase = float(cfg.get("limit_chase_pct", "3.0")) / 100.0
+    # v0.9.41 probes -- CONDITION-based resting-limit management (the live gap:
+    # a resting limit's only exits are fill / 3% chase / 4h clock; conditions
+    # can change while it waits and it fills into a dead thesis anyway).
+    # Fill check stays FIRST in the loop (conservative: fills that happen
+    # before the cycle tick could cancel still count against the feature).
+    lim_regime = str(cfg.get("limit_regime_cancel", "0")).strip().lower() in ("1", "true", "yes")
+    lim_requal = str(cfg.get("limit_requalify", "0")).strip().lower() in ("1", "true", "yes")
+    lim_reprice = str(cfg.get("limit_reprice", "0")).strip().lower() in ("1", "true", "yes")
+    n_cond_cancel = 0; n_reprice = 0
     tstop = int(float(cfg.get("time_stop_hours", "4")))
     # v0.9.22 trade-type sweep: per-entry-mode hold caps. 0/absent = inherit the
     # global time_stop_hours (exactly the pre-v0.9.22 behaviour), so baselines are
@@ -433,6 +442,29 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             run = ((c - q["entry"]) / q["entry"]) if long else ((q["entry"] - c) / q["entry"])
             if run > chase: n_chase += 1; missed.append(_missed(kl, q, i, "chase")); continue
             if (i - q["placed_i"]) >= expiry: n_expire += 1; missed.append(_missed(kl, q, i, "expire")); continue
+            if lim_regime or lim_requal or lim_reprice:
+                _plead = _recon(leader, kl[leader][i - 24:i + 1], cfg)
+                _preg = scoring.regime(_plead, None, cfg)
+                if lim_regime and _preg.direction in ("long", "short") and _preg.direction != q["side"]:
+                    n_cond_cancel += 1; missed.append(_missed(kl, q, i, "regime")); continue
+                if lim_requal:
+                    _pf = _recon(q["sym"], kl[q["sym"]][i - 24:i + 1], cfg)
+                    _psc = scoring.score_universe([_pf], _plead, cfg, q["side"])
+                    if not _psc or _psc[0].skip or _psc[0].score < min_score:
+                        n_cond_cancel += 1; missed.append(_missed(kl, q, i, "requal")); continue
+                if lim_reprice:
+                    _pf = _recon(q["sym"], kl[q["sym"]][i - 24:i + 1], cfg)
+                    if _pf.ok and _pf.vwap and _pf.high and _pf.low:
+                        _atrp = max((_pf.high - _pf.low) / 2.5, 0.0)
+                        _amult = float(cfg.get("atr_limit_mult", "0.3"))
+                        _ne = (_pf.vwap - _amult * _atrp) if long else (_pf.vwap + _amult * _atrp)
+                        # re-anchor only on MATERIAL drift (default half an
+                        # ATR-proxy; reprice_drift_atr is the ONE interpolation
+                        # probe): micro-repricing every bar would churn the queue
+                        _rda = float(cfg.get("reprice_drift_atr", "0.5") or "0.5")
+                        if _ne > 0 and abs(_ne - q["entry"]) >= _rda * _atrp:
+                            q["entry"] = _ne          # original placed_i kept: the
+                            n_reprice += 1            # 4h clock never restarts
             keepp.append(q)
         pends = keepp
 
@@ -607,7 +639,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         close(p, kl[p["sym"]][last][4], "eow", last)
 
     return {"n_sig": n_sig, "n_fill": n_fill, "n_chase": n_chase, "n_expire": n_expire,
-            "missed": missed,
+            "missed": missed, "n_cond_cancel": n_cond_cancel, "n_reprice": n_reprice,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
             "n_preempt": n_preempt, "trades": trades, "max_open": max_conc}
@@ -620,6 +652,7 @@ def report(tag, st):
           f"chase: {st['n_chase']}   expire: {st['n_expire']}   "
           f"corr-block: {st.get('n_corr_block', 0)}   heat-block: {st.get('n_heat_block', 0)}   "
           f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}   "
+          f"cond-cancel: {st.get('n_cond_cancel', 0)}   reprice: {st.get('n_reprice', 0)}   "
           f"preempt: {st.get('n_preempt', 0)}")
     ms = st.get("missed") or []
     if ms:
