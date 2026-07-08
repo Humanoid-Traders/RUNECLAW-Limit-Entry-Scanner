@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.40"
+version: "0.9.41"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -144,8 +144,14 @@ strategy_config:
   #                        forward-tests it on itself; arming a trade path is a
   #                        separate future decision gated on that record.
   #   Fail-open everywhere: no bulk SDK surface / any error -> empty log.
+  # v0.9.41 -- FORWARD TEST ARMED ("1", operator go 2026-07-08): shadow scan
+  # is ON so the record accumulates. Still observation-only (never trades);
+  # the top candidate now surfaces on the SCAN line as `d:<SYM><score>`
+  # (main_live._discovery_token, lowest budget priority). When the record
+  # adjudicates, either arm a trade path or revert to "0" -- do NOT read the
+  # armed default as a permanent baseline.
   extra_symbols: []
-  universe_discovery: "0"
+  universe_discovery: "1"
   discovery_max: 4
   discovery_min_volume_usdt: "30000000"
   discovery_blocklist: ["SNDK", "SKHYNIX", "SOXL", "SPCX", "CL", "KORU", "DRAM", "MU", "SAMSUNG", "MRVL", "XAUT", "QQQ", "TSLA", "NVDA", "MSTR", "XAU", "XAG"]

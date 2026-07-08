@@ -147,7 +147,11 @@ def main():
         line = line[5:]
     segs = line.split("|")
     digest, exec_seg = segs[0], (segs[1] if len(segs) > 1 else "")
-    fate = segs[2] if len(segs) > 2 else ""
+    # v0.9.41: the discovery token `d:<SYM><score>` rides as a trailing segment
+    # (lowest budget priority); pull it out wherever it landed, the rest is fate.
+    trailing = segs[2:]
+    disc_seg = next((t for t in trailing if t.startswith("d:")), "")
+    fate = next((t for t in trailing if not t.startswith("d:")), "")
 
     print("=== digest ===")
     for tok in digest.split("-"):
@@ -195,6 +199,16 @@ def main():
                 print(decode_tail(tp))
         else:
             print(f"  UNPARSED exec segment: {rest}")
+    if disc_seg:
+        body = disc_seg[2:]
+        i = len(body)
+        while i > 0 and body[i-1].isdigit():
+            i -= 1
+        sym, score = body[:i], body[i:]
+        print("=== discovery (v0.9.41 forward test) ===")
+        print(f"  {sym} scored {score} -- a non-core fresh listing the SHADOW scan"
+              f" surfaced. LOGGED only, never traded; the record accumulates for"
+              f" a future arm-or-kill decision.")
     if fate:
         print(f"=== fate === {fate}")
 
