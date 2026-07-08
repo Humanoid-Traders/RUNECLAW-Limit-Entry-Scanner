@@ -109,12 +109,14 @@ def decode_tail(tail):
         if kind == "no" and det:
             out += f" -- {NO_REASONS.get(det, det)}"
         elif kind == "hld" and det:
-            m = re.match(r"^([A-Z0-9]+?)([+-]\d+)([a-z]*)\.t(\d+)h$", det)
+            m = re.match(r"^([A-Z0-9]+?)([+-]\d+)([a-zPB]*)\.t(\d+|\?)h$", det)
             if m:
                 sym, mv, flags, age = m.groups()
                 out += (f" -- {sym} {mv}% (stateless whole-%% rounding, NOT a tier), "
                         f"flags '{flags}' (a=BE armed, l=lock floor sets stop, "
-                        f"s=scale-out, r=trail set stop), held {age}h "
+                        f"s=scale-out, r=trail set stop; P=pullback 4h clock, "
+                        f"B=breakout clock, NEITHER = mode unknown -> 12h global "
+                        f"cap governs, v0.9.37), held {age}h "
                         f"(plain counter; the only hard clocks are the 4h pullback / "
                         f"12h breakout time-stops)")
             else:

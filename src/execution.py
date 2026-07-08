@@ -836,20 +836,33 @@ def _position_entry_mode(symbol: str, hold_side: str, entry, cfg: dict) -> str:
         return ""
     if entry <= 0:
         return ""
-    # Find the TP plan order's trigger: any plan trigger on the PROFIT side of
-    # entry (above for a long, below for a short). The SL/trail always sits on the
-    # protective side, so the two cannot be confused. Shape-tolerant + fail-safe:
-    # any read/parse surprise -> "" (the global cap stays in force).
+    # Find the TP plan order's trigger among the plan triggers on the PROFIT side
+    # of entry (above for a long, below for a short). v0.9.37 -- two live-incident
+    # fixes over the v0.9.22 reader (ETH short 2026-07-08 03:02: a pullback-marked
+    # position closed at the 12h GLOBAL cap -- mode recovery had been returning ""
+    # live, so the 4h pullback clock never governed):
+    #   (1) envelope: the flat data/orders/list key-walk is the SAME parse the
+    #       pT0 incident already proved insufficient for this SDK's nested
+    #       envelopes -- use _extract_rows (built for exactly that), with the
+    #       flat walk kept as fallback for rows that lack a 'symbol' field.
+    #   (2) trigger choice: "the SL always sits on the protective side" is FALSE
+    #       once the trail crosses entry (a winning short's trailed stop sits
+    #       BELOW entry -- profit side). First-trigger-wins could read the
+    #       trailed stop as the TP and refuse the width. The TP backstop is by
+    #       construction the FARTHEST profit-side trigger -- pick that.
+    # Fail-safe unchanged: any read/parse surprise -> "" (global cap governs).
     try:
         plan = trade.contract.plan_pending_orders(symbol=symbol)
-        rows = plan if isinstance(plan, (list, tuple)) else None
-        if rows is None:
-            m = _to_mapping(plan) or {}
-            for key in ("data", "orders", "list", "rows", "entrustedList"):
-                if isinstance(m.get(key), (list, tuple)):
-                    rows = m[key]
-                    break
-        if rows is None:
+        rows = _extract_rows(plan)
+        if not rows:
+            rows = plan if isinstance(plan, (list, tuple)) else None
+            if rows is None:
+                m = _to_mapping(plan) or {}
+                for key in ("data", "orders", "list", "rows", "entrustedList"):
+                    if isinstance(m.get(key), (list, tuple)):
+                        rows = m[key]
+                        break
+        if not rows:
             return ""
         is_long = str(hold_side).lower() in ("long", "buy")
         width = None
@@ -858,8 +871,9 @@ def _position_entry_mode(symbol: str, hold_side: str, entry, cfg: dict) -> str:
             if trig is None or trig <= 0:
                 continue
             if (trig > entry) if is_long else (trig < entry):
-                width = abs(trig - entry) / entry   # profit-side trigger == the TP backstop
-                break
+                w = abs(trig - entry) / entry
+                if width is None or w > width:
+                    width = w           # farthest profit-side trigger == the TP backstop
         if width is None:
             return ""
     except Exception:

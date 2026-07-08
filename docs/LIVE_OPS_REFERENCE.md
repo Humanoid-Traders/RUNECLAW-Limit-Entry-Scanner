@@ -1,6 +1,6 @@
 # RUNECLAW Live Operations Reference
 
-Current as of **v0.9.36** (manifest.yaml). This is a living reference for
+Current as of **v0.9.37** (manifest.yaml). This is a living reference for
 reading live SITREPs and the compact SCAN line without re-deriving mechanics
 from source each time. **The repo is always the source of truth** — if this
 doc and `manifest.yaml` / `src/*.py` ever disagree, trust the code and flag
@@ -100,7 +100,12 @@ currently-managed position. Format pieces:
   their own full-precision thresholds — see §3).
 - flags: `a` = breakeven armed · `l` = a breakeven/steplock floor is
   currently setting the stop (not the raw ATR trail) · `s` = scale-out armed
-  or trimmed · `r` = the trail set the stop this cycle.
+  or trimmed · `r` = the trail set the stop this cycle · **`P`/`B` (v0.9.37)
+  = which hold clock GOVERNS** (P = pullback 4h, B = breakout cap; neither =
+  mode recovery returned unknown → the 12h global cap governs). A
+  pullback-entered position whose `hld` token lacks `P` is running the wrong
+  clock — that absence is exactly how the 2026-07-08 ETH-short incident
+  (pullback held 12h09m past a 4h cap) would have been visible.
 - `.t<age>h` = hours held, floor-rounded (e.g. age 7.9h renders `t7h`). This
   is a **plain age counter**, not a ceiling — it climbs every cycle. It has no
   relationship to a "2H/4H" rule; the only unconditional clocks are the
@@ -299,7 +304,7 @@ margin   = notional / leverage                              # then capped by mar
 
 ---
 
-## 5. Current live parameter reference (v0.9.36)
+## 5. Current live parameter reference (v0.9.37)
 
 | Parameter | Value | manifest.yaml |
 |---|---|---|
