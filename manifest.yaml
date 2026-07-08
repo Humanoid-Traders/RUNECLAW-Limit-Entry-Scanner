@@ -180,6 +180,21 @@ strategy_config:
   min_volume_usdt: "10000000"
   # atr_limit_mult DEFENDED both ways (2026-07-06 sweep, 35d): 0.2 and 0.5 both
   # fail to beat 0.3 on net+PF.
+  # v0.9.43 -- operator's "stochastic OB/OS + KER trend + vol-regime band"
+  # combo, adjudicated (frozen-tape A/B + bootstrap CI):
+  #   stochastic OB/OS entry filter -- PROVEN HARM (rare CI-clear-of-zero kill):
+  #     net +25.7/+56.7/+78.4 -> -5.8/-5.8/-10.5, PF 2.6 -> 0.24, 90% CIs
+  #     [-64,-2]/[-101,-27]/[-138,-43], P(better)=0.04/0.002/0.001. It vetoes
+  #     ~99% of qualified entries (1478/2186/2616 blocked); the 5-7 survivors
+  #     are net losers. A mean-reversion veto (buy only deep-oversold) on a
+  #     TREND-FOLLOWING engine keeps exactly the falling-knife trades and kills
+  #     the pullback edge -- structure_trend_veto's lesson, extremal form.
+  #   KER trend filter -- ALREADY KILLED: it is _efficiency_ratio, shipped as
+  #     the er_floor chop gate (-49pt, see below/ledger).
+  #   vol-regime band (0.20-0.85) -- ALREADY KILLED: the vol_ceiling gate halves
+  #     net every window on the live 28-set (the high-vol alts are the winners).
+  #   Net: all three components settled AGAINST. Do not re-litigate without
+  #   beating these A/Bs.
   # v0.9.42 assumption probes (research-side, fresh same-fetch baselines):
   #   half-size regime path -- EMPTY, not killed: zero 1-vote candidates ever
   #     reached the qualified pool in any window (dead-zone era regimes are
