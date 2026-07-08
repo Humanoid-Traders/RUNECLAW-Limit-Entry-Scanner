@@ -158,6 +158,20 @@ strategy_config:
   min_volume_usdt: "10000000"
   # atr_limit_mult DEFENDED both ways (2026-07-06 sweep, 35d): 0.2 and 0.5 both
   # fail to beat 0.3 on net+PF.
+  # v0.9.42 assumption probes (research-side, fresh same-fetch baselines):
+  #   half-size regime path -- EMPTY, not killed: zero 1-vote candidates ever
+  #     reached the qualified pool in any window (dead-zone era regimes are
+  #     2-vote or neutral, effectively never 1-vote-with-a-qualifier). The
+  #     half-size machinery stays as harmless fail-safe.
+  #   loss_cooldown_hours=12 -- KILLED: -5.1/-5.1/-5.1pt, PF down every
+  #     window. The "revenge trade" is actually the RE-LOAD and it pays: a
+  #     symbol that just stopped us out is often at the extreme the strategy
+  #     wants to fade again. Fourth confirmation: every filter on fills loses.
+  #   feature_window_hours -- 24h DEFENDED: 48h loses catastrophically
+  #     (win% -15pts, PF 3.31->1.78 at 35d); 12h untestable in the harness
+  #     (recon warmup needs >=25 bars) AND unshippable live -- the window is
+  #     the exchange 24h-ticker API's definition, not a config. The system's
+  #     clock is both optimal and structurally fixed.
   # v0.9.41 resting-limit condition probes (research-side, 21/35/42d): can a
   # resting limit react to CHANGED conditions instead of only fill/chase/4h?
   # ALL THREE KILLED -- the exit trio is complete:
