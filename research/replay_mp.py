@@ -254,6 +254,18 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     #     on that symbol for N hours (the live ETH revenge-trade pattern).
     #   feature_window_hours: the system's deepest constant -- EVERYTHING
     #     derives from a 24h window that has never been questioned.
+    # v0.9.43 probe -- stochastic overbought/oversold ENTRY filter (operator ask):
+    # a trend-follower asking a mean-reversion oscillator for permission. Gate a
+    # qualified LONG only if %K <= stoch_oversold (deep pullback), a SHORT only if
+    # %K >= stoch_overbought. %K over stoch_period 1h bars.
+    stoch_on = str(cfg.get("stoch_filter", "0")).strip().lower() in ("1", "true", "yes")
+    try:
+        stoch_p = int(cfg.get("stoch_period", 14))
+        stoch_os = float(cfg.get("stoch_oversold", 30))
+        stoch_ob = float(cfg.get("stoch_overbought", 70))
+    except (TypeError, ValueError):
+        stoch_p, stoch_os, stoch_ob = 14, 30.0, 70.0
+    n_stoch_block = 0
     skip_half = str(cfg.get("skip_half_regime", "0")).strip().lower() in ("1", "true", "yes")
     loss_cd = float(cfg.get("loss_cooldown_hours", "0") or "0")
     n_half_skip = 0; n_cooldown_block = 0
@@ -544,6 +556,19 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             qual = [s for s in qual
                     if s.symbol not in last_loss_i or (i - last_loss_i[s.symbol]) >= loss_cd]
             n_cooldown_block += _n0 - len(qual)
+        if stoch_on:
+            _n0 = len(qual)
+            _kept = []
+            for _s in qual:
+                _w = kl[_s.symbol][max(0, i - stoch_p + 1):i + 1]
+                if len(_w) < 2:
+                    continue
+                _hh = max(b[2] for b in _w); _ll = min(b[3] for b in _w)
+                _k = 100.0 * (_w[-1][4] - _ll) / (_hh - _ll) if _hh > _ll else 50.0
+                if (_s.side == "long" and _k <= stoch_os) or (_s.side == "short" and _k >= stoch_ob):
+                    _kept.append(_s)
+            qual = _kept
+            n_stoch_block += _n0 - len(qual)
         if not pb_on:  # v0.9.22: universe runs pullback-off -> breakout entries only
             qual = [s for s in qual if s.entry_mode == "breakout"]
         if not qual:
@@ -664,7 +689,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
 
     return {"n_sig": n_sig, "n_fill": n_fill, "n_chase": n_chase, "n_expire": n_expire,
             "missed": missed, "n_cond_cancel": n_cond_cancel, "n_reprice": n_reprice,
-            "n_half_skip": n_half_skip, "n_cooldown_block": n_cooldown_block,
+            "n_half_skip": n_half_skip, "n_cooldown_block": n_cooldown_block, "n_stoch_block": n_stoch_block,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
             "n_preempt": n_preempt, "trades": trades, "max_open": max_conc}
@@ -678,7 +703,7 @@ def report(tag, st):
           f"corr-block: {st.get('n_corr_block', 0)}   heat-block: {st.get('n_heat_block', 0)}   "
           f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}   "
           f"cond-cancel: {st.get('n_cond_cancel', 0)}   reprice: {st.get('n_reprice', 0)}   "
-          f"half-skip: {st.get('n_half_skip', 0)}   cooldown: {st.get('n_cooldown_block', 0)}   "
+          f"half-skip: {st.get('n_half_skip', 0)}   cooldown: {st.get('n_cooldown_block', 0)}   stoch-block: {st.get('n_stoch_block', 0)}   "
           f"preempt: {st.get('n_preempt', 0)}")
     ms = st.get("missed") or []
     if ms:
