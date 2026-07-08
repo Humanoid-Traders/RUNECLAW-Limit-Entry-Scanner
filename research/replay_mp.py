@@ -247,6 +247,17 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     lim_requal = str(cfg.get("limit_requalify", "0")).strip().lower() in ("1", "true", "yes")
     lim_reprice = str(cfg.get("limit_reprice", "0")).strip().lower() in ("1", "true", "yes")
     n_cond_cancel = 0; n_reprice = 0
+    # v0.9.42 probes -- unswept ASSUMPTIONS (not knobs):
+    #   skip_half_regime: the 1-vote/half-size regime path has never been
+    #     ablated -- are weak-regime entries profitable at all?
+    #   loss_cooldown_hours: after a realized LOSS on a symbol, block re-entry
+    #     on that symbol for N hours (the live ETH revenge-trade pattern).
+    #   feature_window_hours: the system's deepest constant -- EVERYTHING
+    #     derives from a 24h window that has never been questioned.
+    skip_half = str(cfg.get("skip_half_regime", "0")).strip().lower() in ("1", "true", "yes")
+    loss_cd = float(cfg.get("loss_cooldown_hours", "0") or "0")
+    n_half_skip = 0; n_cooldown_block = 0
+    last_loss_i = {}   # sym -> exit bar index of its last LOSING trade
     tstop = int(float(cfg.get("time_stop_hours", "4")))
     # v0.9.22 trade-type sweep: per-entry-mode hold caps. 0/absent = inherit the
     # global time_stop_hours (exactly the pre-v0.9.22 behaviour), so baselines are
@@ -361,8 +372,11 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         szw = 1.0
         if 0.0 < _ssf < 1.0:
             szw = _ssf + (1.0 - _ssf) * min(max((p.get("score", 70.0) - 70.0) / 20.0, 0.0), 1.0)
+        _r = round(szw * (total - 2 * fee) * 100, 3)
+        if _r < 0:
+            last_loss_i[p["sym"]] = at   # v0.9.42: feeds the loss-cooldown probe
         trades.append({"sym": p["sym"], "side": p["side"], "mode": p["mode"],
-                       "ret_pct": round(szw * (total - 2 * fee) * 100, 3), "reason": why, "exit_i": at})
+                       "ret_pct": _r, "reason": why, "exit_i": at})
 
     for i in range(25, n - 1):
         # 1) manage open positions
@@ -507,7 +521,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         # (the legacy count cap is folded into `blocked` above so preemption can act on it)
         # corr_budget > 0: the weighted gate is applied below, once the candidate
         # symbol+side is known (it depends on which name we'd actually open).
-        lead = _recon(leader, kl[leader][i - 24:i + 1], cfg)
+        _fw = int(float(cfg.get("feature_window_hours", "24") or "24"))
+        lead = _recon(leader, kl[leader][i - _fw:i + 1], cfg)
         reg = scoring.regime(lead, None, cfg)
         if reg.direction not in ("long", "short"):
             continue
@@ -517,9 +532,18 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             if er is not None and er < er_floor:
                 n_chop_block += 1
                 continue
-        feats = [_recon(s, kl[s][i - 24:i + 1], cfg) for s in syms if s not in owned]
+        feats = [_recon(s, kl[s][i - _fw:i + 1], cfg) for s in syms if s not in owned]
         scored = scoring.score_universe(feats, lead, cfg, reg.direction, allow_breakout=use_breakout)
         qual = [s for s in scored if not s.skip and s.score >= min_score]
+        if skip_half:
+            _n0 = len(qual)
+            qual = [s for s in qual if s.size_factor >= 1.0]
+            n_half_skip += _n0 - len(qual)
+        if loss_cd > 0:
+            _n0 = len(qual)
+            qual = [s for s in qual
+                    if s.symbol not in last_loss_i or (i - last_loss_i[s.symbol]) >= loss_cd]
+            n_cooldown_block += _n0 - len(qual)
         if not pb_on:  # v0.9.22: universe runs pullback-off -> breakout entries only
             qual = [s for s in qual if s.entry_mode == "breakout"]
         if not qual:
@@ -640,6 +664,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
 
     return {"n_sig": n_sig, "n_fill": n_fill, "n_chase": n_chase, "n_expire": n_expire,
             "missed": missed, "n_cond_cancel": n_cond_cancel, "n_reprice": n_reprice,
+            "n_half_skip": n_half_skip, "n_cooldown_block": n_cooldown_block,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
             "n_preempt": n_preempt, "trades": trades, "max_open": max_conc}
@@ -653,6 +678,7 @@ def report(tag, st):
           f"corr-block: {st.get('n_corr_block', 0)}   heat-block: {st.get('n_heat_block', 0)}   "
           f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}   "
           f"cond-cancel: {st.get('n_cond_cancel', 0)}   reprice: {st.get('n_reprice', 0)}   "
+          f"half-skip: {st.get('n_half_skip', 0)}   cooldown: {st.get('n_cooldown_block', 0)}   "
           f"preempt: {st.get('n_preempt', 0)}")
     ms = st.get("missed") or []
     if ms:
