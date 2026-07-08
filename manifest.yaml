@@ -158,6 +158,24 @@ strategy_config:
   min_volume_usdt: "10000000"
   # atr_limit_mult DEFENDED both ways (2026-07-06 sweep, 35d): 0.2 and 0.5 both
   # fail to beat 0.3 on net+PF.
+  # v0.9.41 resting-limit condition probes (research-side, 21/35/42d): can a
+  # resting limit react to CHANGED conditions instead of only fill/chase/4h?
+  # ALL THREE KILLED -- the exit trio is complete:
+  #   limit_regime_cancel  -- cancel when the side opposes a flipped leader
+  #     regime: -11/-17/-17pt, PF 2.55->1.63 at 21d. The dip that fills the
+  #     limit and the regime vote flipping are often the SAME local extreme;
+  #     cancelling there surrenders the reversion (structure_trend_veto's
+  #     lesson from the order side).
+  #   limit_requalify      -- re-score the symbol each cycle, cancel on floor
+  #     fail/hard-skip: KILLED DECISIVELY (+6.5/PF 1.2 at 21d; 185-261
+  #     cancels gut the fill pool). A second min_score raise in disguise --
+  #     the marginal fill IS the profitable fill (triple-confirmed family).
+  #   limit_reprice        -- follow the migrating VWAP anchor: INERT at the
+  #     0.5-ATR design threshold (VWAP never drifts that far inside a 4h
+  #     limit life -- zero events in any window); the one interpolation probe
+  #     (0.2 ATR, 7-11 events) is marginally WORSE everywhere. The 4h expiry
+  #     already IS the re-anchor: expire + fresh signal re-places at the new
+  #     vwap +/- 0.3*ATR with zero added machinery.
   # v0.9.37 fill-rate audit + market-entry probe (research-side, 21/35/42d):
   # ~85% of posted pullback limits never fill and the misses lean 2:1 toward
   # missed winners (+0.6% avg 12h thesis-direction drift) -- yet taking the
