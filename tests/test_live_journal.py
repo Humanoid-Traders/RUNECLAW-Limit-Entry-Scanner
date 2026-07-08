@@ -118,10 +118,15 @@ def test_journal_disabled():
         return [_fill(-15, 1)]
     cfg = _wire_state([])
     _trade.contract.fills = _fills
-    cfg["journal_enabled"] = "false"   # and frac 0 -> no fills read at all
+    cfg["journal_enabled"] = "false"   # and frac 0
+    # v0.9.39: the account-day guard (circuit_pause/stop_usdt, default 30/40)
+    # also consumes the single fills read, so "no consumers" now additionally
+    # requires the day guard off. With ALL THREE off, fills() is never called.
+    cfg["circuit_pause_usdt"] = "0"
+    cfg["circuit_stop_usdt"] = "0"
     st = execution.manage_open_state(cfg)
     _assert("fills_journal" not in st, "journal disabled -> no fills_journal")
-    _assert(called["n"] == 0, "journal off + breaker off -> fills() never called")
+    _assert(called["n"] == 0, "journal + breaker + day guard all off -> fills() never called")
 
 
 if __name__ == "__main__":

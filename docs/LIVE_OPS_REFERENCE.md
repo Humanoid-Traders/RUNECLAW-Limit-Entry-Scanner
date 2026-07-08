@@ -1,6 +1,6 @@
 # RUNECLAW Live Operations Reference
 
-Current as of **v0.9.37** (manifest.yaml). This is a living reference for
+Current as of **v0.9.39** (manifest.yaml). This is a living reference for
 reading live SITREPs and the compact SCAN line without re-deriving mechanics
 from source each time. **The repo is always the source of truth** — if this
 doc and `manifest.yaml` / `src/*.py` ever disagree, trust the code and flag
@@ -60,7 +60,13 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   "empty" is untrustworthy while sibling reads fail; healthy-cycle empty
   reads full headroom `b<threshold>`, not blind). Under the 63-char budget
   the token degrades gracefully: full → 4-char stage form → dropped.
-- `cx` suffix = circuit-breaker note, when present.
+- `cx` suffix = circuit/ops notes, when present (v0.9.39): `-cx` = the legacy
+  equity circuit is non-functional (state never persists — historical); `-dw` =
+  account-day realized past the Rule-10 warn line (warn only, entries flow);
+  `-!clk` / `-!mgn` / `-!sl` = **invariant sentinel confession** — the engine
+  found its own live book violating a contract (wrong hold clock / crossed
+  margin under an isolated manifest / oversized stop risk). A `-!` token is
+  never noise: decode it same-day.
 
 ### Tail priority chain (`_dbg_tail`, `src/main_live.py:620-648`) — first match wins
 
@@ -304,7 +310,7 @@ margin   = notional / leverage                              # then capped by mar
 
 ---
 
-## 5. Current live parameter reference (v0.9.37)
+## 5. Current live parameter reference (v0.9.39)
 
 | Parameter | Value | manifest.yaml |
 |---|---|---|

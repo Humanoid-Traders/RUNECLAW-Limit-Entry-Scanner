@@ -40,7 +40,9 @@ NO_REASONS = {
     "lowscore": "nothing at/above min_score 70 survived pooling",
     "enrich0": "candidates qualified at ticker stage but ALL were skipped in enrichment (a decision, not a fault)",
     "sizefail": "sizing failed",
-    "cbpause": "circuit breaker pause", "cbtrip": "circuit breaker trip",
+    "cbpause": "circuit breaker pause",
+    "cbtrip": "circuit breaker trip -- since v0.9.39 also the account-day Rule-13 halt (realized fills since UTC midnight <= -circuit_stop_usdt)",
+    "paused": "entries_paused safe mode (card key): NEW entries stopped, management engine still running",
 }
 BLIND_STAGES = {
     "r": "fills read failed outright",
@@ -158,6 +160,16 @@ def main():
 
     if exec_seg:
         print("=== exec state ===")
+        if "-dw" in exec_seg:
+            print("  -dw: account-day WARNING (v0.9.39) -- realized since UTC midnight past the")
+            print("       Rule-10 soft line (circuit_pause_usdt). Warn only; entries keep flowing.")
+        if "-!" in exec_seg:
+            code = exec_seg.split("-!", 1)[1][:3]
+            inv = {"clk": "per-mode clocks armed but mode recovery UNKNOWN -- position on the wrong (12h global) clock",
+                   "mgn": "live position is CROSSED while the manifest says isolated",
+                   "sl": "protective stop implies risk > max_loss x 1.3 -- oversized"}
+            print(f"  -!{code}: INVARIANT SENTINEL confession (v0.9.39): "
+                  f"{inv.get(code, 'unknown code -- grammar drift?')}")
         rest = exec_seg
         if rest.startswith("nof-"):
             print("  nof-: NON-FOLLOW cycle (eval/pre-window) -- the engine scanned but "

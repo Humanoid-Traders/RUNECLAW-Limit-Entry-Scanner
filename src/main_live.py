@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.38"
+ANALYSIS_VERSION = "0.9.39"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -362,6 +362,13 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
 
     if circuit in ("paused", "tripped"):
         return watch(top_symbol, "circuit_" + str(circuit))
+    # v0.9.39 -- entries_paused: card-tunable safe mode. Stops NEW risk while the
+    # management engine (trail/steplock/scale-out/time-stops/breaker) keeps
+    # running -- previously the only way to stop entries was disabling the whole
+    # playbook, which also abandoned open positions to their static exchange
+    # orders (the "go dark to be safe" dilemma; uptime beats parameters).
+    if str(cfg.get("entries_paused", "0")).strip().lower() in ("1", "true", "yes"):
+        return watch(top_symbol, "entries_paused")
     if not any_active:
         return watch(top_symbol, "all_regimes_neutral")
     if not qualified:
@@ -587,7 +594,8 @@ _WATCH_SHORT = {
     "no_setup_after_enrichment": "enrich0",
     "sizing_failed": "sizefail",
     "circuit_paused": "cbpause",
-    "circuit_tripped": "cbtrip",
+    "circuit_tripped": "cbtrip",   # v0.9.39: also the account-day Rule-13 halt
+    "entries_paused": "paused",    # v0.9.39: operator safe mode (card key)
 }
 
 
@@ -923,6 +931,13 @@ def run() -> None:
     # does not persist (its day_start_equity never round-trips -> it can never trip).
     bkr = _breaker_token(mgmt)
     cbx = _circuit_state_token(mgmt)
+    # v0.9.39: the cx slot carries the day-guard warning and the invariant
+    # sentinel's confession -- both rare, both worth their budget when present.
+    if mgmt.get("day_warn"):
+        cbx += "-dw"               # account-day realized past the Rule-10 line
+    _invs = mgmt.get("invariant_breaches")
+    if _invs:
+        cbx += "-!" + str(_invs[0]).split(":", 1)[0][:3]
     dbg = ("DBG-f{f}{em}-own{own}-pT{pt}-oP{op}-act{a}-c{c}p{p}{bk}{cx}-{t}"
            .format(f=int(follow), em=emc, own=own, pt=pT, op=oP, a=acts,
                    c=int(called), p=pcode, bk=bkr, cx=cbx, t=tail))[:63]
