@@ -1,0 +1,37 @@
+name: baseline-drift
+# Weekly OOS baseline drift check (CLAUDE.md maintenance discipline, automated):
+# runs the canonical 21d joint-live-baseline replay against the live 28-symbol
+# set and publishes the summary as an artifact. REPORT-ONLY -- never blocks
+# merges; the numbers are interpreted against the manifest-recorded baselines
+# by whoever reads them (drift beyond noise = the tape changed).
+on:
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays 06:23 UTC
+  workflow_dispatch: {}
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run 21d joint-baseline replay (live 28-symbol set)
+        run: |
+          python3 research/replay_mp.py --days 21 --breakout \
+            --symbols BTCUSDT ETHUSDT SOLUSDT LABUSDT ZECUSDT XRPUSDT DOGEUSDT TAOUSDT \
+            HYPEUSDT BNBUSDT SUIUSDT ADAUSDT LINKUSDT ENAUSDT ONDOUSDT BCHUSDT AVAXUSDT \
+            NEARUSDT AAVEUSDT WLDUSDT XPLUSDT XLMUSDT TRUMPUSDT MUSDT INJUSDT SEIUSDT \
+            PEPEUSDT SHIBUSDT \
+            --exit-mode trail --trail 2.0 --time-stop 12 --be-lock 1.5 \
+            --steplock 2:1.5,4:3,6:4.5 --scaleout 0.35 \
+            --set tp2_pct=20,breakout_trend_min=0.7,max_vwap_ext_pct=5.0,pullback_time_stop_hours=4,pullback_tp2_pct=22,loss_pause_pct=3,regime_chg_deadzone_pct=0.3 \
+            | tee baseline_21d.txt
+          grep -E "ALL|tail" baseline_21d.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baseline-drift-report
+          path: baseline_21d.txt
+          retention-days: 90

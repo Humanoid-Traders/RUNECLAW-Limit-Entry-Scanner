@@ -179,6 +179,18 @@ def test_entries_paused_short_form_and_cx_tokens():
     _assert(cbx == "", "healthy state -> empty cx")
 
 
+def test_config_overrides_detection():
+    # v0.9.40: default config -> no overrides reported (silence when clean)
+    _assert(ml._config_overrides({}) == {}, "shipped defaults -> empty overrides")
+    _assert(ml._config_overrides({"loss_breaker_frac": "0.018"}) == {},
+            "explicit-but-equal value -> not an override")
+    ovr = ml._config_overrides({"loss_breaker_frac": "0.05", "entries_paused": "1"})
+    _assert(ovr == {"loss_breaker_frac": "0.05", "entries_paused": "1"},
+            "card-tuned frac + safe mode both surfaced: " + str(ovr))
+    _assert(ml._config_overrides({"extra_symbols": ["EVAAUSDT"]}) ==
+            {"extra_symbols": ["EVAAUSDT"]}, "list-typed override surfaced")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
