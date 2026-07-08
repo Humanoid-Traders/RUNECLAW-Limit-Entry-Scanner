@@ -566,6 +566,38 @@ def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> Symbol
     return feats
 
 
+# v0.9.42 -- asset-class classifier for MULTI-CLASS shadow discovery. Bitget
+# lists ~45 non-crypto RWA perps (measured 2026-07-08): tokenized stocks
+# (memory/semi-heavy -- SNDK/MU/SKHYNIX/DRAM/INTC/MRVL + big tech), a handful
+# of ETFs (SOXL/SPCX/KORU/TQQQ/SQQQ/SPY/IWM), and commodities (CL crude, XAUT
+# tokenized gold). Each class needs its OWN regime leader -- scoring a stock
+# perp under BTC is garbage (the v0.9.13 taker bug). This map routes each base
+# to the right universe leader so discovery can score EVERY class correctly.
+# Curated (a denylist/classifier, not exhaustive): an unlisted name defaults
+# to crypto, which is the safe direction for the CRYPTO regime. Extend as
+# Bitget lists new RWA names. There is no distinct pre-IPO perp class on the
+# venue (SPCX = space/SpaceX exposure, classed etf).
+_DISC_STOCK = frozenset("""SNDK MU SKHYNIX DRAM INTC MRVL SAMSUNG AMD MSFT PLTR
+HOOD BABA META ORCL AMZN AAPL AVGO TSM GOOGL GOOG COIN NFLX XOM LLY KO CVX MCD
+GME UNH WMT V ABNB NKE BA JPM CRCL OPEN TSLA NVDA MSTR DIS SBET DJT MARA RIOT
+CLSK SQ SHOP PYPL UBER DELL SMCI ARM QCOM TXN CSCO IBM""".split())
+_DISC_ETF = frozenset("""SOXL SPCX KORU TQQQ SQQQ SPY IWM QQQ GLD SLV USO UNG DIA
+SOXS SPXL TNA UVXY VXX""".split())
+_DISC_COMMODITY = frozenset("""CL XAU XAG XAUT XAGT BRENT WTI NG HG PL PA""".split())
+
+
+def classify_asset(base: str) -> str:
+    """Route a perp base symbol to its asset class -> regime leader universe.
+    stock/etf -> the equities (QQQ) universe; commodity -> metals (XAU);
+    everything else -> crypto (BTC). Curated; unknown defaults to crypto."""
+    b = str(base or "").upper()
+    if b in _DISC_STOCK or b in _DISC_ETF:
+        return "equities"
+    if b in _DISC_COMMODITY:
+        return "metals"
+    return "crypto"
+
+
 def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
     """v0.9.38 -- whole-exchange new-listing catcher (SHADOW-mode data source).
 
@@ -585,9 +617,15 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
     try:
         min_qv = float(cfg.get("discovery_min_volume_usdt", "30000000") or "30000000")
         top_k = int(cfg.get("discovery_max", 4))
+        per_class = int(cfg.get("discovery_max_per_class", top_k) or top_k)
     except (TypeError, ValueError):
-        min_qv, top_k = 3e7, 4
+        min_qv, top_k, per_class = 3e7, 4, 4
     block = {str(b).upper() for b in (cfg.get("discovery_blocklist") or [])}
+    # v0.9.42 -- multi-class: classify each candidate and cap PER CLASS so
+    # stocks/ETFs never crowd out crypto (or vice versa). Set discovery_classes
+    # on the card to restrict (e.g. "crypto" for the old crypto-only behaviour).
+    want = {c.strip().lower() for c in str(cfg.get("discovery_classes",
+            "crypto,equities,metals") or "").split(",") if c.strip()}
     rows, how = None, ""
     for call in ("tickers", "ticker"):
         try:
@@ -632,6 +670,18 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         )
         if f.last is None or f.high is None or f.low is None or f.vwap is None:
             continue
-        out.append(f)
-    out.sort(key=lambda f: f.quote_volume or 0.0, reverse=True)
-    return out[:max(top_k, 0)], how
+        cls = classify_asset(sym[:-4])
+        if want and cls not in want:
+            continue
+        out.append((f, cls))
+    out.sort(key=lambda fc: fc[0].quote_volume or 0.0, reverse=True)
+    # per-class cap
+    seen = {}
+    capped = []
+    for f, cls in out:
+        n = seen.get(cls, 0)
+        if n >= max(per_class, 0):
+            continue
+        seen[cls] = n + 1
+        capped.append((f, cls))
+    return capped, how

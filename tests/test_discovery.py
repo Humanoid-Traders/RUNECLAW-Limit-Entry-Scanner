@@ -55,17 +55,17 @@ def test_discovery_filters_and_ranking():
         _row("FOOUSD", 9e9, vwap=1.0),            # out: not a USDT perp
     ])
     got, how = features.discovery_scan({"BTCUSDT"}, CFG)
-    syms = [f.symbol for f in got]
+    syms = [f.symbol for f, cls in got]
     _assert(how == "tickers", "bulk surface identified: " + how)
     _assert(syms == ["EVAAUSDT", "BLURUSDT"],
-            "floor+blocklist+exclusion applied, ranked by volume, top-k capped -> " + str(syms))
+            "floor+blocklist+exclusion applied, ranked by volume, per-class capped -> " + str(syms))
 
 
 def test_discovery_vwap_derived_from_volumes():
     # bulk ticker rows may lack a vwap field; quote/base volume IS the 24h VWAP
     _wire_bulk([_row("EVAAUSDT", 8e7, base_vol=4e7), _row("FILLERUSDT", 1e6, vwap=1.0)])
     got, _ = features.discovery_scan(set(), CFG)
-    _assert(len(got) == 1 and abs(got[0].vwap - 2.0) < 1e-9,
+    _assert(len(got) == 1 and abs(got[0][0].vwap - 2.0) < 1e-9,
             "missing vwap derived as quote/base volume = 2.0")
     # no vwap AND no base volume -> candidate dropped (core fields incomplete)
     _wire_bulk([_row("EVAAUSDT", 8e7), _row("FILLERUSDT", 1e6, vwap=1.0)])
@@ -119,6 +119,45 @@ def test_discovery_armed_default():
             "v0.9.41 forward test ARMED: manifest ships universe_discovery '1'")
     _assert(ml._SHIPPED_DEFAULTS.get("universe_discovery") == "1",
             "shipped-defaults snapshot matches the armed manifest (config_overrides stays honest)")
+
+
+def test_classify_asset_routing():
+    # v0.9.42: each base routes to its regime-leader universe
+    _assert(features.classify_asset("SNDK") == "equities", "tokenized stock -> equities (QQQ)")
+    _assert(features.classify_asset("SOXL") == "equities", "leveraged ETF -> equities (QQQ)")
+    _assert(features.classify_asset("CL") == "metals", "crude commodity -> metals (XAU) leader")
+    _assert(features.classify_asset("XAUT") == "metals", "tokenized gold -> metals")
+    _assert(features.classify_asset("EVAA") == "crypto", "unknown/crypto -> crypto (BTC) default")
+
+
+def test_discovery_multiclass_and_per_class_cap():
+    _wire_bulk([
+        _row("EVAAUSDT", 1.2e8, vwap=1.0), _row("BZUSDT", 4e7, vwap=1.0),   # crypto x2
+        _row("SNDKUSDT", 2e8, vwap=1.0), _row("MUXUSDT", 1.9e8, vwap=1.0),  # (MUX not a stock -> crypto)
+        _row("SOXLUSDT", 1.5e8, vwap=1.0),                                  # etf -> equities
+        _row("CLUSDT", 2.5e8, vwap=1.0), _row("XAUTUSDT", 1.6e7, vwap=1.0), # commodity -> metals
+    ])
+    cfg = {"discovery_min_volume_usdt": "30000000", "discovery_max": 4, "discovery_max_per_class": 1}
+    got, _ = features.discovery_scan({"BTCUSDT"}, cfg)
+    by_cls = {}
+    for f, cls in got:
+        by_cls.setdefault(cls, []).append(f.symbol)
+    _assert(all(len(v) <= 1 for v in by_cls.values()),
+            "per-class cap of 1 enforced across classes: " + str(by_cls))
+    _assert("equities" in by_cls and "crypto" in by_cls and "metals" in by_cls,
+            "all three classes represented: " + str(sorted(by_cls)))
+    # XAUT ($16M) is below the $30M floor -> only CL survives metals
+    _assert(by_cls.get("metals") == ["CLUSDT"], "metals top = CL (XAUT sub-floor)")
+
+
+def test_discovery_classes_restrict():
+    _wire_bulk([_row("EVAAUSDT", 1.2e8, vwap=1.0), _row("SNDKUSDT", 2e8, vwap=1.0),
+                _row("FILLERUSDT", 1e6, vwap=1.0)])
+    cfg = {"discovery_min_volume_usdt": "30000000", "discovery_max": 4,
+           "discovery_classes": "crypto"}   # old crypto-only behaviour
+    got, _ = features.discovery_scan(set(), cfg)
+    syms = [f.symbol for f, cls in got]
+    _assert(syms == ["EVAAUSDT"], "discovery_classes=crypto excludes the stock: " + str(syms))
 
 
 if __name__ == "__main__":

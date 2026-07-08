@@ -30,6 +30,7 @@ _SHIPPED_DEFAULTS = {
     "entries_paused": "0", "universe_discovery": "1", "invariant_sentinel": "1",
     "scaleout_frac": "0.35", "trail_atr_mult": "2.0", "time_stop_hours": "12",
     "pullback_time_stop_hours": "4", "max_concurrent": 3, "extra_symbols": [],
+    "discovery_classes": "crypto,equities,metals",
 }
 
 
@@ -48,7 +49,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.41"
+ANALYSIS_VERSION = "0.9.42"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -279,17 +280,35 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
             _excl = set()
             for _u in unis:
                 _excl.update(_u["symbols"]); _excl.add(_u["leader"])
-            _dfeats, _dnote = features.discovery_scan(_excl, cfg)
-            _csc = scans[0]   # first universe = crypto: its leader + regime gate the scan
-            _dir = _csc["regime"].direction
-            _dscored = (scoring.score_universe(
-                _dfeats, _csc["leader_feats"], cfg,
-                _dir if _dir in ("long", "short") else "long") if _dfeats else [])
-            discovery_log = {"source": _dnote, "candidates": [
-                {"symbol": d.symbol, "side": d.side, "score": round(d.score, 1),
-                 "skip": d.skip, "skip_reason": d.skip_reason,
-                 "qv_musd": round((d.features.quote_volume or 0) / 1e6, 1),
-                 "chg_pct": d.features.change_pct} for d in _dscored]}
+            # v0.9.42 -- MULTI-CLASS: discovery_scan classifies each candidate
+            # (crypto/equities/metals); route each to the MATCHING universe's
+            # already-fetched leader + regime so a stock scores under QQQ and a
+            # commodity under XAU, never under BTC (the v0.9.13 taker-bug class).
+            # Shadow only: candidates are scored and LOGGED, never pooled/traded.
+            # A class whose universe isn't configured this run is logged un-scored.
+            _classed, _dnote = features.discovery_scan(_excl, cfg)
+            _scan_by_name = {sc["name"]: sc for sc in scans}
+            _cands = []
+            for _f, _cls in _classed:
+                _sc = _scan_by_name.get(_cls) or scans[0]  # fall back to crypto leader
+                _dir = _sc["regime"].direction
+                _sd = scoring.score_universe(
+                    [_f], _sc["leader_feats"], cfg,
+                    _dir if _dir in ("long", "short") else "long")
+                _d = _sd[0] if _sd else None
+                _cands.append({
+                    "symbol": _f.symbol, "class": _cls, "leader": _sc["leader"],
+                    "side": (_d.side if _d else None),
+                    "score": (round(_d.score, 1) if _d else None),
+                    "skip": (_d.skip if _d else None),
+                    "skip_reason": (_d.skip_reason if _d else ""),
+                    "qv_musd": round((_f.quote_volume or 0) / 1e6, 1),
+                    "chg_pct": _f.change_pct})
+            _cands.sort(key=lambda c: (c["score"] is not None, c["score"] or 0.0),
+                        reverse=True)
+            discovery_log = {"source": _dnote,
+                             "classes": sorted({c["class"] for c in _cands}),
+                             "candidates": _cands}
         except Exception as _exc:
             discovery_log = {"source": "error:" + type(_exc).__name__, "candidates": []}
 
@@ -801,11 +820,14 @@ def _discovery_token(metrics: dict) -> str:
     cands = disc.get("candidates") if isinstance(disc, dict) else None
     if not cands:
         return ""
-    top = max(cands, key=lambda c: c.get("score", 0.0) if isinstance(c, dict) else 0.0)
+    scored = [c for c in cands if isinstance(c, dict) and isinstance(c.get("score"), (int, float))]
+    if not scored:
+        return ""
+    top = max(scored, key=lambda c: c["score"])
     sym = str(top.get("symbol", "")).replace("USDT", "")[:5]
     if not sym:
         return ""
-    return "d:%s%d" % (sym, int(round(top.get("score", 0.0))))
+    return "d:%s%d" % (sym, int(round(top["score"])))
 
 
 def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
