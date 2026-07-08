@@ -128,6 +128,17 @@ def test_classify_asset_routing():
     _assert(features.classify_asset("CL") == "metals", "crude commodity -> metals (XAU) leader")
     _assert(features.classify_asset("XAUT") == "metals", "tokenized gold -> metals")
     _assert(features.classify_asset("EVAA") == "crypto", "unknown/crypto -> crypto (BTC) default")
+    # v0.9.43: expanded allowlist -- long-tail stocks/ETFs no longer fall to BTC
+    _assert(features.classify_asset("ASML") == "equities", "ASML stock -> equities (was BTC)")
+    _assert(features.classify_asset("GS") == "equities", "Goldman stock -> equities (was BTC)")
+    _assert(features.classify_asset("SMH") == "equities", "SMH ETF -> equities (was BTC)")
+    _assert(features.classify_asset("SGOV") == "equities", "SGOV treasury ETF -> equities (was BTC)")
+    # v0.9.43: pre-IPO-style names are stock perps -> equities (no separate class)
+    _assert(features.classify_asset("OPENAI") == "equities", "preOPAI -> equities (QQQ)")
+    _assert(features.classify_asset("ANTHROPIC") == "equities", "ANTHROPIC -> equities (QQQ)")
+    # v0.9.43: energy bases fixed to the venue's real forms (were falling to BTC)
+    _assert(features.classify_asset("BZ") == "metals", "Brent (BZ) -> commodity/metals leader (was BTC)")
+    _assert(features.classify_asset("NATGAS") == "metals", "NatGas (NATGAS) -> commodity/metals leader (was BTC)")
 
 
 def test_discovery_multiclass_and_per_class_cap():

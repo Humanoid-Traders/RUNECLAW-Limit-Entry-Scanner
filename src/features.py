@@ -567,28 +567,47 @@ def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> Symbol
 
 
 # v0.9.42 -- asset-class classifier for MULTI-CLASS shadow discovery. Bitget
-# lists ~45 non-crypto RWA perps (measured 2026-07-08): tokenized stocks
-# (memory/semi-heavy -- SNDK/MU/SKHYNIX/DRAM/INTC/MRVL + big tech), a handful
-# of ETFs (SOXL/SPCX/KORU/TQQQ/SQQQ/SPY/IWM), and commodities (CL crude, XAUT
-# tokenized gold). Each class needs its OWN regime leader -- scoring a stock
-# perp under BTC is garbage (the v0.9.13 taker bug). This map routes each base
-# to the right universe leader so discovery can score EVERY class correctly.
-# Curated (a denylist/classifier, not exhaustive): an unlisted name defaults
-# to crypto, which is the safe direction for the CRYPTO regime. Extend as
-# Bitget lists new RWA names. There is no distinct pre-IPO perp class on the
-# venue (SPCX = space/SpaceX exposure, classed etf).
+# lists a large, growing non-crypto RWA catalog: tokenized stocks
+# (memory/semi-heavy -- SNDK/MU/SKHYNIX/DRAM/INTC/MRVL + big tech), ETFs
+# (SOXL/SPCX/KORU/TQQQ/SQQQ/SPY/IWM/SMH/VOO...), and commodities (CL crude,
+# XAUT tokenized gold). Each class needs its OWN regime leader -- scoring a
+# stock perp under BTC is garbage (the v0.9.13 taker bug). This map routes each
+# base to the right universe leader so discovery can score EVERY class
+# correctly. Curated (a classifier allowlist, not exhaustive): an unlisted name
+# defaults to crypto, which is the safe direction for the CRYPTO regime.
+# v0.9.43 -- allowlist expanded to the fuller venue catalog read off the
+# Stock-perps (Stocks + ETF) and Commodity-perps (Energy) tabs 2026-07-08,
+# because the previous ~55-name curation silently routed the long tail
+# (GE/MDB/ASML/GS/COST/SMH/VOO/KWEB/SGOV...) to BTC. Two notes:
+#   * pre-IPO-style names (OPENAI = "preOPAI", ANTHROPIC) are listed under
+#     Stock perps -> Stocks, so they class as EQUITIES (QQQ) -- there is no
+#     distinct pre-IPO perp class on the venue (SPCX = space/SpaceX, classed
+#     etf); the pre-IPO names are just stock perps.
+#   * ENERGY bases fixed: the venue uses CL (WTI) / BZ (Brent) / NATGAS, not
+#     the earlier aspirational BRENT/WTI/NG tokens (only CL ever matched, so
+#     BZ/NATGAS were falling through to BTC). They route to the metals (XAU)
+#     COMMODITY leader as the best available commodity proxy. A DEDICATED
+#     energy leader (WTI/Brent-gated) is the right long-run home -- oil's
+#     regime is not gold's -- but that is deferred: energy is unvalidated and
+#     TRADING any RWA class stays a separate validated decision. This is a
+#     shadow-log-quality fix (discovery logs, never trades), not a trade path.
 _DISC_STOCK = frozenset("""SNDK MU SKHYNIX DRAM INTC MRVL SAMSUNG AMD MSFT PLTR
 HOOD BABA META ORCL AMZN AAPL AVGO TSM GOOGL GOOG COIN NFLX XOM LLY KO CVX MCD
 GME UNH WMT V ABNB NKE BA JPM CRCL OPEN TSLA NVDA MSTR DIS SBET DJT MARA RIOT
-CLSK SQ SHOP PYPL UBER DELL SMCI ARM QCOM TXN CSCO IBM""".split())
+CLSK SQ SHOP PYPL UBER DELL SMCI ARM QCOM TXN CSCO IBM
+GE MDB TER LRCX PANW COHR ASML GEV GS COST LIN LMT APP BRKB KIOXIA ROK CIEN
+NOC BNC SUMIELEC DOOSENER DOOSBOT SMR ISRG COP SPIR NTAP PDD TENCENT SONY
+ACHR NETEASE QUBT WDC OPENAI ANTHROPIC""".split())
 _DISC_ETF = frozenset("""SOXL SPCX KORU TQQQ SQQQ SPY IWM QQQ GLD SLV USO UNG DIA
-SOXS SPXL TNA UVXY VXX""".split())
-_DISC_COMMODITY = frozenset("""CL XAU XAG XAUT XAGT BRENT WTI NG HG PL PA""".split())
+SOXS SPXL TNA UVXY VXX
+EWY EWT EWJ EWH KWEB SOXX SMH VOO INDA SGOV RAMU CONL EUV DISK KSTR DIASTOCK
+DFEN XLU""".split())
+_DISC_COMMODITY = frozenset("""CL BZ NATGAS XAU XAG XAUT XAGT BRENT WTI NG HG PL PA""".split())
 
 
 def classify_asset(base: str) -> str:
     """Route a perp base symbol to its asset class -> regime leader universe.
-    stock/etf -> the equities (QQQ) universe; commodity -> metals (XAU);
+    stock/etf -> the equities (QQQ) universe; commodity/energy -> metals (XAU);
     everything else -> crypto (BTC). Curated; unknown defaults to crypto."""
     b = str(base or "").upper()
     if b in _DISC_STOCK or b in _DISC_ETF:
