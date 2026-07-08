@@ -669,8 +669,11 @@ def manage_open_state(cfg: dict) -> dict:
     except (TypeError, ValueError):
         lb_frac = 0.0
     journal_on = str(cfg.get("journal_enabled", "true")).strip().lower() not in ("false", "0", "no", "")
-    if lb_frac > 0 or journal_on:
-        fills_rows = _read_fills()  # one read serves both the breaker and the journal
+    if lb_frac > 0 or journal_on or soft > 0 or hard > 0:
+        fills_rows = _read_fills()  # one read serves breaker + journal + day guard
+        fills_raw = fills_rows      # v0.9.39: UNSCOPED copy -- the day guard runs in
+                                    # the ACCOUNT frame (operator Rules 10/13 count
+                                    # manual fills too), unlike the size-scoped breaker
         # v0.9.4 (audit S-4): scope out oversized (manual) fills before either
         # consumer sees them; unreadable-size fills are kept (fail-conservative).
         if fills_rows:
@@ -683,6 +686,33 @@ def manage_open_state(cfg: dict) -> dict:
             except (TypeError, ValueError):
                 jw = 24.0
             status["fills_journal"] = _fills_journal(fills_rows, jw)
+        # v0.9.39 -- stateless account-day guard: the resurrection of the DEAD
+        # equity circuit (circuit_pause_usdt 30 / circuit_stop_usdt 40 == the
+        # operator's Rule 10 warning / Rule 13 hard stop). The legacy circuit
+        # needs day_start_equity to round-trip through .state/ (never persists
+        # in this runtime -> today_pnl 0 forever -> the -cx token). Same trick
+        # as the v0.8.0 rolling breaker: the exchange is the memory -- realized
+        # fills since UTC midnight ARE the account day. Semantics match the
+        # rulebook, not the dead circuit: soft = WARN ONLY (feed token -dw,
+        # entries keep flowing), hard = trip (entries halt; management +
+        # exchange SL/TP untouched). Fail-open: unreadable fills/timestamps ->
+        # no day read -> no false halt. Uses the UNSCOPED rows (account frame).
+        if (soft > 0 or hard > 0) and fills_raw:
+            try:
+                _now = datetime.now(timezone.utc)
+                _day_hrs = _now.hour + _now.minute / 60.0 + _now.second / 3600.0
+                _dprofs = [w["profit"] for w in _fills_in_window(fills_raw, max(_day_hrs, 0.02))
+                           if w["profit"] is not None]
+                day_pnl = sum(_dprofs)
+                status["day_realized"] = round(day_pnl, 4)
+                if hard > 0 and day_pnl <= -abs(hard):
+                    status["circuit"] = "tripped"
+                    status["day_halt"] = True
+                    status["controls_active"]["circuit_breaker"] = True
+                elif soft > 0 and day_pnl <= -abs(soft):
+                    status["day_warn"] = True
+            except Exception:
+                pass
         if lb_frac > 0:
             try:
                 lb_window = float(cfg.get("loss_breaker_window_hours", "24") or "24")
@@ -978,6 +1008,55 @@ def _best_effort_position_controls(cfg: dict, records: list, status: dict, actio
         is_long = hold_side.lower() in ("long", "buy")
         move_pct = (current - entry) / entry if is_long else (entry - current) / entry
         diag["move_pct"] = round(move_pct * 100.0, 3)
+
+        # v0.9.39 -- invariant sentinel: the engine audits ITSELF against its own
+        # contracts each cycle and confesses in the feed (cx slot, -!<code>)
+        # instead of leaving violations to forensic reconstruction from fills
+        # (the 12h-clock incident was invisible for 8 hours; this makes its
+        # class visible on cycle one). Observation-only: no behaviour changes,
+        # ever. Checks (first breach wins, all best-effort fail-open):
+        #   clk -- per-mode hold caps armed but mode recovery returned unknown:
+        #          the position is running the WRONG (global) clock.
+        #   mgn -- manifest says isolated but the live position reads crossed.
+        #   sl  -- protective stop implies risk > max_loss x 1.3 (tolerance
+        #          covers the benign decision-vs-fill price drift, ~2% observed).
+        if str(cfg.get("invariant_sentinel", "1")).strip().lower() not in ("0", "false", "no"):
+            try:
+                breach = ""
+                if (_ts_bk > 0 or _ts_pb > 0) and diag.get("tmode") == "?":
+                    breach = "clk"
+                if not breach and str(cfg.get("margin_mode", "")).strip().lower() == "isolated":
+                    _mm = str(_find_string(record, ("marginMode", "margin_mode",
+                                                    "marginModeName")) or "").lower()
+                    if "cross" in _mm:
+                        breach = "mgn"
+                if not breach:
+                    _ntl = _record_notional(record)
+                    if _ntl and _ntl > 0:
+                        _stop = None
+                        try:
+                            _plan = trade.contract.plan_pending_orders(symbol=symbol)
+                            for _row in (_extract_rows(_plan) or []):
+                                _tg = _find_number(_row, _TRIGGER_KEYS)
+                                if _tg is None or _tg <= 0:
+                                    continue
+                                if (_tg < entry) if is_long else (_tg > entry):
+                                    # protective side; the NEAREST such trigger is the stop
+                                    if _stop is None or abs(_tg - entry) < abs(_stop - entry):
+                                        _stop = _tg
+                        except Exception:
+                            _stop = None
+                        if _stop:
+                            _risk = abs(entry - _stop) / entry * _ntl
+                            if _risk > float(cfg.get("max_loss_usdt", "15") or "15") * 1.3:
+                                breach = "sl"
+                if breach:
+                    diag["inv"] = breach
+                    status.setdefault("invariant_breaches", []).append(
+                        breach + ":" + symbol.replace("USDT", "")[:4])
+            except Exception:
+                pass
+
         be_armed = (move_pct >= be_trigger_pct or (upnl is not None and upnl >= be_trigger_usdt))
         diag["be_armed"] = be_armed
         # v0.9.7 scale-out (opt-in, fail-closed; no-op at the default frac 0).
