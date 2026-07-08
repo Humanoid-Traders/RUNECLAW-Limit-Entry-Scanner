@@ -458,9 +458,11 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                         _atrp = max((_pf.high - _pf.low) / 2.5, 0.0)
                         _amult = float(cfg.get("atr_limit_mult", "0.3"))
                         _ne = (_pf.vwap - _amult * _atrp) if long else (_pf.vwap + _amult * _atrp)
-                        # re-anchor only on MATERIAL drift (>= half an ATR-proxy):
-                        # micro-repricing every bar would just churn the queue
-                        if _ne > 0 and abs(_ne - q["entry"]) >= 0.5 * _atrp:
+                        # re-anchor only on MATERIAL drift (default half an
+                        # ATR-proxy; reprice_drift_atr is the ONE interpolation
+                        # probe): micro-repricing every bar would churn the queue
+                        _rda = float(cfg.get("reprice_drift_atr", "0.5") or "0.5")
+                        if _ne > 0 and abs(_ne - q["entry"]) >= _rda * _atrp:
                             q["entry"] = _ne          # original placed_i kept: the
                             n_reprice += 1            # 4h clock never restarts
             keepp.append(q)
