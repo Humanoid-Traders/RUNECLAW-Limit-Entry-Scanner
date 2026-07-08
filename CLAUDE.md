@@ -51,6 +51,15 @@ python3 research/replay_mp.py --days {21|35|42} --breakout \
 - Weekly maintenance: rerun the 3-window baseline and compare against the
   numbers recorded in manifest comments — drift beyond noise means the tape
   changed, not that killed ideas came back to life.
+- **Sweep on frozen tapes**: add `--data-file tape.json` so every arm runs on
+  the identical dataset (re-fetching between arms compares different tapes —
+  the window-drift trap, hit twice on 2026-07-08). Add `--dump-trades f.json`
+  per arm and run `python3 research/ab_ci.py a.json b.json` for a bootstrap
+  CI on the delta. Calibration fact: a −5pt single-window delta on ~60 trades
+  has a 90% CI of ±60pt — **single windows prove nothing; the all-windows
+  rule is what carries the inference**. Small-delta kills mean "no evidence
+  of benefit, don't ship complexity," not "proven harm"; only large
+  consistent deltas (structure veto, requalify, fw48 class) are proven harms.
 
 ## Build/test/ship mechanics
 
