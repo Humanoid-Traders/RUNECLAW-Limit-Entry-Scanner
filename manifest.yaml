@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.39"
+version: "0.9.40"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -115,6 +115,16 @@ strategy_config:
   #                        changes behaviour, only reports.
   entries_paused: "0"
   invariant_sentinel: "1"
+  # v0.9.40 -- decision transparency (both metrics-only, zero behaviour):
+  #   paper-shadow -- when a GATE blocks entries (entries_paused / day halt /
+  #     circuit), the would-be trade (symbol/side/entry/SL/TP/mode/notional) is
+  #     logged to metrics.paper_trade, so every dark-by-choice period measures
+  #     its own opportunity cost (participation gaps = the #1 P&L drag,
+  #     reconciliation 2026-07-07).
+  #   config_overrides -- keys whose EFFECTIVE (card-merged) value differs from
+  #     the shipped default are logged each cycle (metrics.config_overrides);
+  #     card tunes were previously invisible and had to be solved from token
+  #     arithmetic (the live b4/b24 frac episode).
   max_scan_symbols: 28
   # v0.9.38 -- universe expansion, two mechanisms (measured 2026-07-08: 697
   # perps on the venue, only ~12 non-core crypto names above the core's own

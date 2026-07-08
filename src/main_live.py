@@ -15,11 +15,40 @@ from getagent import runtime
 from . import execution, features, risk, scoring
 
 _GATE = "BTCUSDT"
+
+# v0.9.40 -- config-drift visibility: the SHIPPED defaults for the operationally
+# critical keys. The runtime cfg is the manifest+card merge, so a card override
+# is otherwise invisible to the feed and to anyone decoding it (the live b4/b24
+# episode: loss_breaker_frac card-tuned 0.018 -> 0.03 -> 0.05 had to be SOLVED
+# from token arithmetic). Every cycle, keys whose effective value differs from
+# this snapshot are logged to metrics.config_overrides. Update alongside the
+# manifest when a default is deliberately changed.
+_SHIPPED_DEFAULTS = {
+    "loss_breaker_frac": "0.018", "margin_budget": "100", "leverage": 10,
+    "max_loss_usdt": "15", "min_score": 70, "margin_mode": "isolated",
+    "max_scan_symbols": 28, "circuit_pause_usdt": "30", "circuit_stop_usdt": "40",
+    "entries_paused": "0", "universe_discovery": "0", "invariant_sentinel": "1",
+    "scaleout_frac": "0.35", "trail_atr_mult": "2.0", "time_stop_hours": "12",
+    "pullback_time_stop_hours": "4", "max_concurrent": 3, "extra_symbols": [],
+}
+
+
+def _config_overrides(cfg: dict) -> dict:
+    out = {}
+    for k, dflt in _SHIPPED_DEFAULTS.items():
+        v = cfg.get(k, dflt)
+        try:
+            same = (float(v) == float(dflt))
+        except (TypeError, ValueError):
+            same = (str(v) == str(dflt)) if not isinstance(dflt, list) else (list(v or []) == dflt)
+        if not same:
+            out[k] = v if isinstance(v, (int, float, list)) else str(v)
+    return out
 # v0.9.4: version + provenance stamp on every emitted analysis record, so
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.39"
+ANALYSIS_VERSION = "0.9.40"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -347,6 +376,9 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
     }
     if discovery_log is not None:
         base_metrics["discovery"] = discovery_log
+    _ovr = _config_overrides(cfg)
+    if _ovr:
+        base_metrics["config_overrides"] = _ovr
 
     def watch(symbol: str, reason: str, extra_metrics: dict = None) -> dict:
         metrics = dict(base_metrics)
@@ -360,15 +392,37 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
 
     top_symbol = all_scored[0].symbol if all_scored else unis[0]["leader"]
 
+    def _paper() -> dict:
+        """v0.9.40 -- paper-shadow: when a GATE (safe mode / day halt / circuit)
+        blocks entries, the decision the engine WOULD have made evaporates --
+        so pauses have an invisible opportunity cost (reconciliation 2026-07-07
+        proved participation gaps are the #1 P&L drag). Log the would-be trade
+        so every dark-by-choice period measures itself. Metrics-only."""
+        try:
+            if not qualified:
+                return {}
+            b = qualified[0]
+            plan = risk.build_plan(b.features, cfg, b.size_factor,
+                                   side=b.side, entry_mode=b.entry_mode)
+            if plan is None:
+                return {}
+            return {"paper_trade": {
+                "symbol": b.symbol, "side": b.side, "score": round(b.score, 1),
+                "entry_mode": plan.entry_mode, "entry": round(plan.entry, 6),
+                "sl": round(plan.sl_price, 6), "tp2": round(plan.tp2, 6),
+                "notional_usdt": round(plan.notional_usdt, 2)}}
+        except Exception:
+            return {}
+
     if circuit in ("paused", "tripped"):
-        return watch(top_symbol, "circuit_" + str(circuit))
+        return watch(top_symbol, "circuit_" + str(circuit), extra_metrics=_paper())
     # v0.9.39 -- entries_paused: card-tunable safe mode. Stops NEW risk while the
     # management engine (trail/steplock/scale-out/time-stops/breaker) keeps
     # running -- previously the only way to stop entries was disabling the whole
     # playbook, which also abandoned open positions to their static exchange
     # orders (the "go dark to be safe" dilemma; uptime beats parameters).
     if str(cfg.get("entries_paused", "0")).strip().lower() in ("1", "true", "yes"):
-        return watch(top_symbol, "entries_paused")
+        return watch(top_symbol, "entries_paused", extra_metrics=_paper())
     if not any_active:
         return watch(top_symbol, "all_regimes_neutral")
     if not qualified:
