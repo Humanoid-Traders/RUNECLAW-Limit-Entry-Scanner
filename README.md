@@ -1,6 +1,6 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** · GetAgent playbook `runeclaw-limit-scanner` · codebase **v0.9.4** · `decision_mode: deterministic`
+**Live on Bitget** · GetAgent playbook `runeclaw-limit-scanner` · codebase **v0.9.42** · `decision_mode: deterministic`
 
 > A two-sided, **multi-asset** perpetual-futures scanner across **crypto, equities (RWA stock perps), and commodities (precious metals)** — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold), ranked by a blended deterministic score, and entered with resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it, trades with the prevailing regime, and treats capital preservation as the first job.
 
@@ -75,7 +75,7 @@ breakout path was value-tested for metals and rejected — see §6).
 
 **4. Exit — layered and risk-first.** A protective stop sits beyond the recently
 defended structural level (floored at a per-tier minimum). When the trailing stop
-is active, a **wide `tp2` backstop** (15%) is attached so the ratcheting trail —
+is active, a **wide `tp2` backstop** (20%) is attached so the ratcheting trail —
 not a tight target — governs the upside; the trail moves the stop only in the
 protective direction, only on a meaningful tick, and never loosens. An intraday
 time-stop and stale-limit expiry close out the tail.
@@ -97,12 +97,12 @@ control variable; everything else is derived from it.
 | TP/SL on every entry | required | order rejected without a resolved plan |
 | Stop floor (per tier) | BTC/ETH 1.5% · SOL/BNB 1.2% · alts 2.5% | minimum stop distance so noise can't place an absurdly tight stop |
 | Trailing stop | 2×ATR ratchet | `trail_atr_mult`; protective-direction only, fail-safe no-op |
-| Time-stop | 12h | `time_stop_hours` — closes a position regardless of P&L |
+| Time-stop | breakout 12h · pullback 4h | `time_stop_hours` / `pullback_time_stop_hours` — closes a position regardless of P&L (per-mode since v0.9.22) |
 | Limit expiry | 4h | `limit_expiry_hours` — cancels unfilled resting orders (checked per scan cycle) |
 | Chase-cancel | 3% | `limit_chase_pct` — drops a limit the market ran away from |
 | Ownership scope | $1,500 notional | `margin_budget × leverage × size_scope_mult`; positions above this are never adopted |
-| Realized-loss breaker | **armed** (0.08, since v0.9.3) | `loss_breaker_frac` — pauses new entries after a trailing-window realized-loss streak (§6); set 0 to disable |
-| Margin mode | crossed (default) | `margin_mode`; isolated is an opt-in, trial-gated path (untested live) |
+| Realized-loss breaker | **armed** (0.018, recalibrated v0.9.24) | `loss_breaker_frac` — pauses new entries after a trailing-window realized-loss streak (§6); set 0 to disable |
+| Margin mode | isolated (default, v0.9.29) | `margin_mode`; caps gap-through-stop risk to the position's own margin; card-revert to `crossed` restores the pre-v0.9.29 path |
 
 **Ownership is stateless and size-scoped.** `.state/` does not persist between
 scheduled runs, so ownership is recomputed every cycle from live exchange state,
@@ -124,12 +124,16 @@ read fails, the cycle is `state_blind` and no new entry is placed.
   (`state_runs` stays at 1). Its working replacement is the **stateless
   realized-loss breaker** (v0.8.0), which sources trailing realized P&L from
   exchange fills — no local persistence required. **Armed by default since
-  v0.9.3** (`loss_breaker_frac = 0.08`, the validated setting); set it to 0 to
-  disable.
-- **Margin mode is crossed by default.** Earlier documentation claimed isolated
-  margin was enforced; it never was (verified). The opt-in isolated path exists
-  (v0.6.4) but is untested live, so the proven default is crossed. Per-trade loss
-  is bounded by the exchange SL + `max_loss` regardless of mode.
+  v0.9.3**, and **recalibrated to `loss_breaker_frac = 0.018` in v0.9.24** (the
+  original 0.08 was ~4.4× looser than the validated stand-down point and
+  essentially never fired); set it to 0 to disable.
+- **Margin mode is isolated by default (v0.9.29).** The opt-in isolated path
+  (added v0.6.4) was validated via card override and made the shipped default at
+  operator request — it caps a gap-through-stop to the position's own margin
+  instead of whole-account equity. It is fail-closed (a wrong hedge mapping
+  rejects rather than placing a wrong-direction trade); card-revert to `crossed`
+  restores the pre-v0.9.29 path instantly. Per-trade loss is bounded by the
+  exchange SL + `max_loss` regardless of mode.
 
 ### What we do not claim
 
@@ -158,7 +162,7 @@ dimensions (momentum, VWAP position, range position, order book, volume), mirror
 for shorts, with the three hard skips.
 
 **4. Risk engine — `risk.py: build_plan`.** Backward-from-stop sizing, the
-per-tier stop floors, the TP ladder (`tp1` 5% / `tp2` 15%), the ATR trailing
+per-tier stop floors, the TP ladder (`tp1` 5% / `tp2` 20%), the ATR trailing
 distance, and the breakeven trigger.
 
 **5. Execution & management engine — `execution.py`.** The layer that owns the
@@ -258,16 +262,16 @@ max_concurrent: 3         # max open commitments
 max_correlated_alts: 2    # correlation budget (→1 when BTC/ETH held)
 atr_limit_mult: "0.3"     # pullback-limit depth (× ATR from VWAP)
 tp1_pct: "5.0"            # first target
-tp2_pct: "15.0"           # wide backstop when the trail is active
+tp2_pct: "20.0"           # wide backstop when the trail is active
 trail_atr_mult: "2.0"     # trailing-stop distance (× ATR)
 breakeven_pct: "2.0"      # move stop to breakeven after this favorable move
 time_stop_hours: "12"     # force-close after this long
 limit_expiry_hours: "4"   # cancel unfilled resting limits
 limit_chase_pct: "3.0"    # chase-cancel threshold
 size_scope_mult: "1.5"    # ownership cap = margin_budget × leverage × this = $1,500
-loss_breaker_frac: "0.08" # realized-loss breaker (armed since v0.9.3; 0 = off)
+loss_breaker_frac: "0.018" # realized-loss breaker (armed v0.9.3, recalibrated v0.9.24; 0 = off)
 journal_enabled: "true"   # live trade journal emission
-margin_mode: "crossed"    # isolated is an opt-in, trial-gated path
+margin_mode: "isolated"   # v0.9.29 default; card-revert to crossed restores the prior path
 kline_interval: "1h"      # ATR timeframe (Wilder, atr_period 14)
 trend_interval: "4h"      # higher-TF trend
 ```
@@ -348,8 +352,11 @@ local validation; no feature is shipped that fails the harness.**
   keep an intra-trade high-water track, so the live journal records realized P&L
   only; excursion metrics stay backtest-only.
 - **Equity circuit breaker is non-functional** (`.state/` ephemeral) — superseded
-  by the stateless realized-loss breaker (armed by default since v0.9.3).
-- **Crossed margin by default** — isolated is an untested opt-in path.
+  by the stateless realized-loss breaker (armed by default since v0.9.3,
+  recalibrated to 0.018 in v0.9.24). A stateless account-day guard (v0.9.39)
+  additionally resurrects the Rule-10/Rule-13 lines from exchange fills.
+- **Isolated margin by default (v0.9.29)** — caps gap-through-stop risk to the
+  position's own margin; card-revert to `crossed` restores the prior path.
 - **No news/event filter** — RWA equity perps can gap on earnings/macro prints.
 - **Strategy sits idle by design** — when leaders chop without direction it opens
   nothing, and the pullback-limit entry misses trending moves that never pull back.
@@ -372,15 +379,15 @@ local validation; no feature is shipped that fails the harness.**
 默认 15 USDT）与止损距离反推。
 
 **平仓 (Closing).** 退出分层、风险优先：结构性保护止损（设有每类最小止损距离）；当跟踪止损
-启用时挂上较宽的 `tp2`（15%）作为后备，由逐步收紧的 ATR 跟踪止损主导上行（只朝有利方向移动，
+启用时挂上较宽的 `tp2`（20%）作为后备，由逐步收紧的 ATR 跟踪止损主导上行（只朝有利方向移动，
 绝不放松）；并设日内时间止损与挂单过期撤销。
 
 **风险 (Risk).**
 - 每笔最大亏损由 `max_loss_usdt` 控制，仓位由止损距离反推。
 - 杠杆可调（默认 10x，最高 25x）；更高杠杆会同时放大盈利与回撤。
 - **基于 `.state/` 的当日权益熔断在当前运行环境中不生效**（`.state/` 不持久化），其替代是
-  **无状态的已实现亏损熔断**（v0.8.0；自 v0.9.3 起默认开启，`loss_breaker_frac=0.08`，设为 0 可关闭）。
+  **无状态的已实现亏损熔断**（v0.8.0；自 v0.9.3 起默认开启，v0.9.24 校准为 `loss_breaker_frac=0.018`，设为 0 可关闭）。
 - 限制最大并发持仓与相关性敞口；持仓所有权按规模范围界定，绝不接管更大的人工仓位。
-- **默认全仓（crossed）保证金**；逐仓为未实测的可选路径。
+- **默认逐仓（isolated）保证金**（v0.9.29）：把跳空穿损风险限制在该仓位自身保证金内；可在卡片上改回全仓（crossed）。
 - 在领头标的无方向震荡、或快速行情击穿止损时表现较差，按设计可能长时间空仓。
 - 过往表现不代表未来收益；实盘有手续费与滑点，请按可承受回撤规模建仓。
