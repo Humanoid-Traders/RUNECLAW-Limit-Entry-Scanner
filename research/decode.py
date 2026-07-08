@@ -205,10 +205,11 @@ def main():
         while i > 0 and body[i-1].isdigit():
             i -= 1
         sym, score = body[:i], body[i:]
-        print("=== discovery (v0.9.41 forward test) ===")
-        print(f"  {sym} scored {score} -- a non-core fresh listing the SHADOW scan"
-              f" surfaced. LOGGED only, never traded; the record accumulates for"
-              f" a future arm-or-kill decision.")
+        print("=== discovery (v0.9.42 multi-class forward test) ===")
+        print(f"  {sym} scored {score} -- the top-scored candidate the SHADOW scan"
+              f" surfaced (could be crypto, a tokenized stock/ETF, or a commodity --"
+              f" each scored under its own regime leader). LOGGED only, never traded;"
+              f" the full per-class list is in metrics.discovery.")
     if fate:
         print(f"=== fate === {fate}")
 
