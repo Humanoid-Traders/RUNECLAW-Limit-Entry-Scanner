@@ -91,11 +91,34 @@ def test_extra_symbols_merge():
             "absent extra_symbols -> exact legacy universe (bit-exact default)")
 
 
-def test_discovery_default_off():
-    _assert(str({}.get("universe_discovery", "0")) == "0" and
-            "universe_discovery: \"0\"" in open(
-                __file__.replace("tests/test_discovery.py", "manifest.yaml")).read(),
-            "manifest ships universe_discovery '0' -- shadow scan off by default")
+
+
+def test_discovery_token_and_fold():
+    # v0.9.41: highest-scoring candidate surfaces as d:<SYM><score>
+    m = {"discovery": {"source": "tickers", "candidates": [
+        {"symbol": "EVAAUSDT", "score": 72.0}, {"symbol": "BLURUSDT", "score": 85.4}]}}
+    _assert(ml._discovery_token(m) == "d:BLUR85", "top-score candidate -> d:BLUR85")
+    _assert(ml._discovery_token({}) == "", "no discovery -> empty token")
+    _assert(ml._discovery_token({"discovery": {"candidates": []}}) == "",
+            "discovery on but nothing found -> empty token")
+    # fold: a quiet line has room for the token; a full 3-universe line drops it
+    quiet = ml._fold_exec_onto_scan("cry:n-met:n-equ:n", "0", "0", "-b50", "",
+                                    "no.neutral", None, disc="d:BLUR85")
+    _assert(quiet.endswith("|d:BLUR85") and len(quiet) <= 63,
+            "quiet board surfaces the discovery token: " + quiet)
+    busy = ml._fold_exec_onto_scan("cry:sLAB80q-met:sXAG54x-equ:sMSTR100q", "2", "1",
+                                   "-b50", "", "hld.MSTR+2P.t4h", None, disc="d:BLUR85")
+    _assert("d:BLUR85" not in busy and len(busy) <= 63,
+            "busy board drops the token under the 63-char budget (never truncates the tail)")
+
+
+def test_discovery_armed_default():
+    import re as _re
+    mf = open(__file__.replace("tests/test_discovery.py", "manifest.yaml")).read()
+    _assert('universe_discovery: "1"' in mf,
+            "v0.9.41 forward test ARMED: manifest ships universe_discovery '1'")
+    _assert(ml._SHIPPED_DEFAULTS.get("universe_discovery") == "1",
+            "shipped-defaults snapshot matches the armed manifest (config_overrides stays honest)")
 
 
 if __name__ == "__main__":

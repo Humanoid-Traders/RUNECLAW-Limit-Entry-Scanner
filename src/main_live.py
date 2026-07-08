@@ -27,7 +27,7 @@ _SHIPPED_DEFAULTS = {
     "loss_breaker_frac": "0.018", "margin_budget": "100", "leverage": 10,
     "max_loss_usdt": "15", "min_score": 70, "margin_mode": "isolated",
     "max_scan_symbols": 28, "circuit_pause_usdt": "30", "circuit_stop_usdt": "40",
-    "entries_paused": "0", "universe_discovery": "0", "invariant_sentinel": "1",
+    "entries_paused": "0", "universe_discovery": "1", "invariant_sentinel": "1",
     "scaleout_frac": "0.35", "trail_atr_mult": "2.0", "time_stop_hours": "12",
     "pullback_time_stop_hours": "4", "max_concurrent": 3, "extra_symbols": [],
 }
@@ -48,7 +48,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.40"
+ANALYSIS_VERSION = "0.9.41"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -787,8 +787,29 @@ def _scan_digest(scans: list, min_score: float) -> str:
     return ("SCAN-" + "-".join(parts))[:63]
 
 
+def _discovery_token(metrics: dict) -> str:
+    """v0.9.41: surface the shadow-discovery forward test on the SCAN line so the
+    operator can WATCH fresh-listing candidates accumulate live, instead of the
+    record sitting invisibly in metrics.discovery (the same read-path gap that
+    hid config_overrides/paper_trade). Renders `d:<SYM><score>` for the
+    highest-SCORING discovery candidate this cycle -- the most interesting fresh
+    listing. Lowest priority on the line (dropped first under the 63-char budget,
+    after fate): busy boards yield it, but a quiet/dark board -- exactly when the
+    operator is watching for new names -- has the room. Empty when discovery is
+    off or found nothing."""
+    disc = metrics.get("discovery") if isinstance(metrics, dict) else None
+    cands = disc.get("candidates") if isinstance(disc, dict) else None
+    if not cands:
+        return ""
+    top = max(cands, key=lambda c: c.get("score", 0.0) if isinstance(c, dict) else 0.0)
+    sym = str(top.get("symbol", "")).replace("USDT", "")[:5]
+    if not sym:
+        return ""
+    return "d:%s%d" % (sym, int(round(top.get("score", 0.0))))
+
+
 def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
-                         tail: str, fate, follow: bool = True) -> str:
+                         tail: str, fate, follow: bool = True, disc: str = "") -> str:
     """v0.9.17: the SITREP tool surfaces only the LAST per-cycle close-signal. Every
     cycle emits DBG (the exec line) and then SCAN -- both action="close" -- so the
     SCAN emit clobbers the DBG emit, and the exec-state (own/pending, the action
@@ -823,6 +844,10 @@ def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
     if fate:
         cand = "%s|%s" % (line, fate)
         if len(cand) <= 63:              # fate only if it still fits; never truncates the tail
+            line = cand
+    if disc:                             # v0.9.41: discovery token is lowest priority
+        cand = "%s|%s" % (line, disc)
+        if len(cand) <= 63:
             line = cand
     return line[:63]
 
@@ -1043,8 +1068,10 @@ def run() -> None:
     # onto the SCAN line too -- the operator's tool surfaces only this (last) close-
     # signal, so the separate DBG emit was never seen. Reuses the exact tokens the
     # DBG line above computed (own/pT/bkr/cbx/tail).
+    disc_tok = _discovery_token(decision.get("metrics", {}))
     scan_line = _fold_exec_onto_scan(scan_digest, own, pT, bkr, cbx, tail,
-                                     str(fate) if fate else None, follow=follow)
+                                     str(fate) if fate else None, follow=follow,
+                                     disc=disc_tok)
     try:
         runtime.emit_signal(
             action="close", symbol=scan_line, confidence=0.111,
