@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.42"
+version: "0.9.43"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -164,6 +164,17 @@ strategy_config:
   # RWA blocklist is retired: those names are now CLASSIFIED, not blocked.
   # discovery_classes restricts which classes scan ("crypto" = old behaviour).
   # No distinct pre-IPO perp class exists on the venue (SPCX = space, etf).
+  # v0.9.43 -- classifier allowlist EXPANDED (features._DISC_STOCK/_ETF/
+  # _COMMODITY) to the fuller venue catalog read off the Stock-perps and
+  # Commodity-perps (Energy) tabs 2026-07-08. The prior ~55-name curation
+  # silently routed the long tail (GE/MDB/ASML/GS/COST/SMH/VOO/KWEB/SGOV, plus
+  # pre-IPO OPENAI/ANTHROPIC) to BTC; now they score under QQQ. Energy bases
+  # fixed to the venue's real forms CL/BZ/NATGAS (BZ/NATGAS were falling to
+  # BTC); they route to the metals (XAU) commodity leader as a proxy -- a
+  # dedicated energy leader is a future refinement, deferred because trading
+  # any RWA class is a separate validated decision. STILL SHADOW: logs only,
+  # zero trade-path change; fail-open unchanged. The forward-test record just
+  # gets cleaner class labels + correct leaders for far more names.
   extra_symbols: []
   universe_discovery: "1"
   discovery_max: 4
@@ -180,8 +191,8 @@ strategy_config:
   min_volume_usdt: "10000000"
   # atr_limit_mult DEFENDED both ways (2026-07-06 sweep, 35d): 0.2 and 0.5 both
   # fail to beat 0.3 on net+PF.
-  # v0.9.43 -- operator's "stochastic OB/OS + KER trend + vol-regime band"
-  # combo, adjudicated (frozen-tape A/B + bootstrap CI):
+  # v0.9.42-era (research-side, no ship) -- operator's "stochastic OB/OS + KER
+  # trend + vol-regime band" combo, adjudicated (frozen-tape A/B + bootstrap CI):
   #   stochastic OB/OS entry filter -- PROVEN HARM (rare CI-clear-of-zero kill):
   #     net +25.7/+56.7/+78.4 -> -5.8/-5.8/-10.5, PF 2.6 -> 0.24, 90% CIs
   #     [-64,-2]/[-101,-27]/[-138,-43], P(better)=0.04/0.002/0.001. It vetoes
