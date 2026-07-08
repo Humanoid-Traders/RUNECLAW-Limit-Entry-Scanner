@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.37"
+version: "0.9.38"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -86,6 +86,29 @@ strategy_config:
   # to "crossed" restores the proven path instantly.
   margin_mode: "isolated"
   max_scan_symbols: 28
+  # v0.9.38 -- universe expansion, two mechanisms (measured 2026-07-08: 697
+  # perps on the venue, only ~12 non-core crypto names above the core's own
+  # $10M floor -- the 28 core IS the liquid crypto universe; what's missing is
+  # the fresh-listing momentum class, LAB/XPL/TRUMP/M/EVAA, historically added
+  # by hand weeks late):
+  #   extra_symbols     -- card-tunable manual watchlist appended to the crypto
+  #                        universe (trades normally; raise max_scan_symbols on
+  #                        the card when the total passes 28 or the tail is
+  #                        silently never scanned).
+  #   universe_discovery-- SHADOW mode: one bulk ticker read ranks every
+  #                        non-core USDT perp above discovery_min_volume_usdt,
+  #                        scores the top discovery_max under the crypto regime,
+  #                        and LOGS them (metrics.discovery). Nothing trades off
+  #                        it -- a discovery rule cannot be honestly backtested
+  #                        (today's list shows only survivors), so the engine
+  #                        forward-tests it on itself; arming a trade path is a
+  #                        separate future decision gated on that record.
+  #   Fail-open everywhere: no bulk SDK surface / any error -> empty log.
+  extra_symbols: []
+  universe_discovery: "0"
+  discovery_max: 4
+  discovery_min_volume_usdt: "30000000"
+  discovery_blocklist: ["SNDK", "SKHYNIX", "SOXL", "SPCX", "CL", "KORU", "DRAM", "MU", "SAMSUNG", "MRVL", "XAUT", "QQQ", "TSLA", "NVDA", "MSTR", "XAU", "XAG"]
   # min_score DEFENDED both ways (2026-07-06 sweep, 35d live baseline): 65 loses
   # 11pt net (slot/correlation dynamics -- more qualifiers, fewer completed
   # trades) and 75 is catastrophic (PF 0.58; the 70-75 band holds the profitable

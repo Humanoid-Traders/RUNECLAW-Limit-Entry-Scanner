@@ -19,7 +19,7 @@ _GATE = "BTCUSDT"
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.37"
+ANALYSIS_VERSION = "0.9.38"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -120,9 +120,19 @@ def _universes(cfg: dict) -> list:
                 if key in u:
                     row[key] = u[key]
             out.append(row)
-    if out:
-        return out
-    return [{"name": "crypto", "leader": _GATE, "symbols": default_syms, "allow_short": None}]
+    if not out:
+        out = [{"name": "crypto", "leader": _GATE, "symbols": default_syms, "allow_short": None}]
+    # v0.9.38 -- extra_symbols: a card-tunable manual watchlist appended to the
+    # FIRST universe (crypto). Lets the operator add a fresh listing the day it
+    # matters without a manifest edit + redeploy dark window (uptime beats
+    # parameters -- reconciliation 2026-07-07). NOTE: pass-1 slices candidates
+    # to max_scan_symbols, so adding names beyond 28 needs that key raised on
+    # the card too, or the tail of the list is silently never scanned.
+    extra = [str(x).upper() for x in (cfg.get("extra_symbols") or []) if x]
+    if extra and out:
+        seen = set(out[0]["symbols"])
+        out[0]["symbols"] = out[0]["symbols"] + [x for x in extra if x not in seen]
+    return out
 
 
 def _scan_universe(uni: dict, cfg: dict, blackout: dict = None) -> dict:
@@ -227,6 +237,33 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
                 if any(u.get("event_blackout") for u in unis) else None)
     scans = [_scan_universe(u, cfg, blackout=blackout) for u in unis]
 
+    # v0.9.38 -- SHADOW-mode whole-exchange discovery (opt-in, observation only).
+    # A discovery rule can't be honestly backtested (today's ticker list shows
+    # only survivors), so the engine forward-tests it on itself: candidates are
+    # scored under the crypto regime and LOGGED (metrics.discovery); they never
+    # enter the qualified pool. discovery_trade stays "0" until the forward
+    # record earns an arming decision. Fail-open everywhere: no bulk SDK
+    # surface / any error -> empty log, zero effect on the decision path.
+    discovery_log = None
+    if str(cfg.get("universe_discovery", "0")).strip().lower() in ("1", "true", "yes"):
+        try:
+            _excl = set()
+            for _u in unis:
+                _excl.update(_u["symbols"]); _excl.add(_u["leader"])
+            _dfeats, _dnote = features.discovery_scan(_excl, cfg)
+            _csc = scans[0]   # first universe = crypto: its leader + regime gate the scan
+            _dir = _csc["regime"].direction
+            _dscored = (scoring.score_universe(
+                _dfeats, _csc["leader_feats"], cfg,
+                _dir if _dir in ("long", "short") else "long") if _dfeats else [])
+            discovery_log = {"source": _dnote, "candidates": [
+                {"symbol": d.symbol, "side": d.side, "score": round(d.score, 1),
+                 "skip": d.skip, "skip_reason": d.skip_reason,
+                 "qv_musd": round((d.features.quote_volume or 0) / 1e6, 1),
+                 "chg_pct": d.features.change_pct} for d in _dscored]}
+        except Exception as _exc:
+            discovery_log = {"source": "error:" + type(_exc).__name__, "candidates": []}
+
     # --- merge board + qualified pool across universes (mixed sides) ---
     all_scored = []
     for sc in scans:
@@ -308,6 +345,8 @@ def build_decision(cfg: dict, mgmt: dict) -> dict:
         "data_health": {sc["leader"]: _field_health(sc["leader_feats"]) for sc in scans},
         "run_id": runtime.run_id,
     }
+    if discovery_log is not None:
+        base_metrics["discovery"] = discovery_log
 
     def watch(symbol: str, reason: str, extra_metrics: dict = None) -> dict:
         metrics = dict(base_metrics)

@@ -564,3 +564,74 @@ def enrich(feats: SymbolFeatures, cfg: dict, exchange: str = "bitget") -> Symbol
     feats.funding_now, feats.funding_avg, feats.funding_ok = fetch_funding(
         feats.symbol, interval=f_int, limit=f_win, exchange=exchange)
     return feats
+
+
+def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
+    """v0.9.38 -- whole-exchange new-listing catcher (SHADOW-mode data source).
+
+    The 28-symbol core already contains every deep crypto perp on the venue
+    (measured 2026-07-08: 697 listed perps, only ~12 non-core crypto names
+    above the core's own $10M floor -- and the interesting ones are exactly
+    the fresh-listing momentum class the operator has been adding by hand,
+    weeks late: LAB/XPL/TRUMP/M, and today EVAA at +167%/$80M days after
+    listing). A discovery rule CANNOT be honestly backtested -- today's
+    ticker list only shows the survivors -- so this feeds a forward-test:
+    candidates are scanned, scored, and logged every cycle; nothing trades
+    off them unless the operator arms it after the forward record earns it.
+
+    One bulk read serves the whole exchange; probes a small set of likely
+    SDK bulk surfaces and fails OPEN (empty result + note) if none exists.
+    Returns (list[SymbolFeatures] ranked by quote volume, note)."""
+    try:
+        min_qv = float(cfg.get("discovery_min_volume_usdt", "30000000") or "30000000")
+        top_k = int(cfg.get("discovery_max", 4))
+    except (TypeError, ValueError):
+        min_qv, top_k = 3e7, 4
+    block = {str(b).upper() for b in (cfg.get("discovery_blocklist") or [])}
+    rows, how = None, ""
+    for call in ("tickers", "ticker"):
+        try:
+            fn = getattr(data.crypto.futures, call, None)
+            if fn is None:
+                continue
+            obb = fn(exchange=exchange) if call == "tickers" else fn(symbol="", exchange=exchange)
+            got = _to_records(obb)
+            if not got and isinstance(obb, (list, tuple)):   # bare row-list envelope
+                got = [r for r in (_model_dict(x) or (x if isinstance(x, dict) else None)
+                                   for x in obb) if r]
+            if got and len(got) > 1:
+                rows, how = got, call
+                break
+        except Exception:
+            continue
+    if not rows:
+        return [], "no_bulk_surface"
+    out = []
+    for row in rows:
+        sym = str(row.get("symbol", "") or "").upper().replace("_", "").replace("-", "")
+        if not sym.endswith("USDT") or sym in exclude:
+            continue
+        if sym[:-4] in block or sym in block:
+            continue
+        qv = _f(row.get("quote_volume"))
+        if qv is None or qv < min_qv:
+            continue
+        vwap = _f(row.get("vwap"))
+        if vwap is None:
+            bv = _f(row.get("base_volume")) or _f(row.get("volume"))
+            if bv and bv > 0 and qv:
+                vwap = qv / bv          # 24h quote/base volume == the rolling VWAP
+        f = SymbolFeatures(
+            symbol=sym, ok=True,
+            last=_f(row.get("last")), vwap=vwap,
+            high=_f(row.get("high")), low=_f(row.get("low")),
+            change_pct=_f(row.get("change_percent")),
+            quote_volume=qv,
+            bid_volume=_f(row.get("bid_volume")),
+            ask_volume=_f(row.get("ask_volume")),
+        )
+        if f.last is None or f.high is None or f.low is None or f.vwap is None:
+            continue
+        out.append(f)
+    out.sort(key=lambda f: f.quote_volume or 0.0, reverse=True)
+    return out[:max(top_k, 0)], how
