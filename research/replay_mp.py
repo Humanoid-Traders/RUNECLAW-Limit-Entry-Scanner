@@ -770,6 +770,10 @@ def main():
                     help="A/B no gate vs a sweep of leader efficiency-ratio floors")
     ap.add_argument("--by-symbol", action="store_true",
                     help="print per-symbol net/trades/avg (edge-concentration audit)")
+    ap.add_argument("--data-file", default="",
+                    help="frozen dataset path: load if exists, else fetch once and save (kills window drift between sweep arms)")
+    ap.add_argument("--dump-trades", default="",
+                    help="write the closed-trades list as JSON (feeds research/ab_ci.py bootstrap)")
     ap.add_argument("--leader", default="BTCUSDT",
                     help="regime leader for this universe (e.g. XAUUSDT for metals, QQQUSDT for equities)")
     ap.add_argument("--symbols", nargs="*", default=[
@@ -803,7 +807,26 @@ def main():
             k, v = kv.split("=", 1)
             cfg[k.strip()] = v.strip()
     fetch_syms = list(dict.fromkeys(list(a.symbols) + [a.leader]))  # leader must be fetched too
-    data = R.fetch_all(fetch_syms, a.days)
+    # v0.9.43 -- frozen datasets: every sweep used to re-fetch live bars, so
+    # arm-vs-baseline runs hours apart quietly compared DIFFERENT tapes (the
+    # window-drift problem: two same-day sweeps needed fresh baselines to stay
+    # honest). --data-file loads a snapshot if it exists, else fetches once and
+    # saves it -- every arm of a sweep then runs on the identical tape.
+    if a.data_file:
+        import json as _json
+        from pathlib import Path as _Path
+        _df = _Path(a.data_file)
+        if _df.exists():
+            _blob = _json.loads(_df.read_text())
+            data = ({k: v for k, v in _blob["kl"].items()}, {k: v for k, v in _blob["kl4"].items()})
+            print(f"loaded frozen dataset {a.data_file} "
+                  f"({len(data[0])} syms, {max((len(v) for v in data[0].values()), default=0)} bars)")
+        else:
+            data = R.fetch_all(fetch_syms, a.days)
+            _df.write_text(_json.dumps({"kl": data[0], "kl4": data[1]}))
+            print(f"froze dataset -> {a.data_file}")
+    else:
+        data = R.fetch_all(fetch_syms, a.days)
     base = f"leader={a.leader} breakout={'ON' if a.breakout else 'off'} exit={a.exit_mode} " \
            f"trail={a.trail} ts={a.time_stop} ({len(a.symbols)}syms {a.days}d, 3-slot)"
     if a.ab_corr:
@@ -896,6 +919,11 @@ def main():
         print("\nNOTE: approximate multi-position replay -- ranking tool, not P&L promise.")
         return
     st = simulate_mp(cfg, a.symbols, a.days, a.breakout, data=data)
+    if a.dump_trades and st:
+        import json as _json
+        with open(a.dump_trades, "w") as _fh:
+            _json.dump(st["trades"], _fh)
+        print(f"dumped {len(st['trades'])} trades -> {a.dump_trades}")
     if st:
         st["by_symbol"] = a.by_symbol
         report(base, st)
