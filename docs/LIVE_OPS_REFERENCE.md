@@ -72,8 +72,12 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   due). It exists because the `d:` token above is budget-dead and
   `metrics.discovery` is unreachable through the operator's tools (config-level
   only). Read `source`: **`tickers`/`ticker` = bulk surface LIVE** (forward test
-  collecting), **`no_bulk_surface` = BLIND** (SDK-native per-symbol fallback
-  warranted), **`error:<Type>` = exception path**. `<n>c` = candidate count;
+  collecting), **`watchlist` = per-symbol FALLBACK active** (v0.9.45 — bulk blind,
+  probing the named `discovery_watchlist`; monitors known names only, cannot catch
+  UNKNOWN listings), **`no_bulk_surface` = BLIND with no watchlist configured**,
+  **`error:<Type>` = exception path**. Confirmed live 2026-07-09: the venue's SDK
+  has **no bulk ticker method**, so the bulk read is permanently blind — the
+  `watchlist` fallback is the working path. `<n>c` = candidate count;
   optional `-<SYM><score>` = top scored candidate. Cadence: **LOUD every cycle
   while blind/errored** (a persistent blind read must not hide behind the board),
   a **quiet hourly (:00) heartbeat while healthy** so SCAN owns the other cycles.

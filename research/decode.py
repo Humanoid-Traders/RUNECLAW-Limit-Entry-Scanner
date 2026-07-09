@@ -155,6 +155,9 @@ def main():
         src, n, sym, score = m.groups()
         if src in ("tickers", "ticker"):
             verdict = "bulk ticker surface LIVE -- forward test is collecting"
+        elif src == "watchlist":
+            verdict = ("per-symbol FALLBACK active (v0.9.45) -- bulk surface blind, "
+                       "probing the named discovery_watchlist; cannot catch UNKNOWN listings")
         elif src == "no_bulk_surface":
             verdict = ("BLIND -- no bulk SDK surface found (fail-open); the "
                        "SDK-native per-symbol fallback is warranted")
