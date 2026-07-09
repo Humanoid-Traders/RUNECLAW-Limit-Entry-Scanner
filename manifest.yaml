@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.43"
+version: "0.9.44"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -164,6 +164,18 @@ strategy_config:
   # RWA blocklist is retired: those names are now CLASSIFIED, not blocked.
   # discovery_classes restricts which classes scan ("crypto" = old behaviour).
   # No distinct pre-IPO perp class exists on the venue (SPCX = space, etf).
+  # v0.9.44 -- discovery OBSERVABILITY fix. The forward test was unreadable: the
+  # `d:` SCAN token is budget-dropped on every scored 3-universe board (proven
+  # live, 10/10 real Recent-Signals lines carried no d:), and metrics.discovery
+  # is a confirmed hard wall (the operator's tools expose playbook CONFIG only,
+  # no per-cycle metrics). So 'is the bulk-ticker surface LIVE or BLIND?' could
+  # not be answered at all. Fix: main_live._discovery_marker emits a DEDICATED
+  # `DISC-<source>-<n>c[-<SYM><score>]` signal that the Recent-Signals view shows
+  # on its own line -- LOUD (every cycle) while blind/errored, a QUIET hourly
+  # heartbeat (:00 only) while healthy, so SCAN keeps the slot the rest of the
+  # time. Diagnostic-only (confidence 0.111, non-tradable symbol -> never
+  # opens/closes), fail-open. This is what finally settles live-vs-blind on the
+  # NEXT deploy; nothing about the shadow discovery path itself changed.
   # v0.9.43 -- classifier allowlist EXPANDED (features._DISC_STOCK/_ETF/
   # _COMMODITY) to the fuller venue catalog read off the Stock-perps and
   # Commodity-perps (Energy) tabs 2026-07-08. The prior ~55-name curation

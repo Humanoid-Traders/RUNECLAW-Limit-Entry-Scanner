@@ -49,7 +49,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.43"
+ANALYSIS_VERSION = "0.9.44"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -830,6 +830,51 @@ def _discovery_token(metrics: dict) -> str:
     return "d:%s%d" % (sym, int(round(top["score"])))
 
 
+def _discovery_marker(metrics: dict) -> str:
+    """v0.9.44: a DEDICATED discovery-source line for the Recent-Signals view.
+    The `d:` token above cannot answer the one question the forward test needs --
+    'is the bulk-ticker surface LIVE or BLIND?' -- because it rides the SCAN line
+    at lowest priority and is budget-dropped on every scored 3-universe board
+    (proven live: 10/10 real lines carried no d:; the digest alone is ~42 of the
+    63 chars). And metrics.discovery is unreachable through the operator's tools
+    (config-level only -- a confirmed hard wall). So surface `discovery.source`
+    as its OWN compact signal the view can show on its own line:
+        DISC-<source>-<n>c[-<TOPSYM><score>]
+      DISC-tickers-4c-BLUR85     -> bulk LIVE, 4 candidates, top BLUR 85
+      DISC-no_bulk_surface-0c    -> BLIND (fallback path is warranted)
+      DISC-error:AttributeError-0c -> exception path
+    Returns "" when discovery is disabled (no marker, zero behaviour change)."""
+    disc = metrics.get("discovery") if isinstance(metrics, dict) else None
+    if not isinstance(disc, dict):
+        return ""
+    src = str(disc.get("source", "?")).replace(" ", "")
+    cands = disc.get("candidates") or []
+    top = ""
+    scored = [c for c in cands if isinstance(c, dict)
+              and isinstance(c.get("score"), (int, float))]
+    if scored:
+        b = max(scored, key=lambda c: c["score"])
+        base = str(b.get("symbol", "")).replace("USDT", "")[:5]
+        if base:
+            top = "-%s%d" % (base, int(round(b["score"])))
+    return ("DISC-%s-%dc%s" % (src, len(cands), top))[:63]
+
+
+def _discovery_marker_due(metrics: dict, minute: int) -> bool:
+    """Cadence so the marker TIME-SHARES the one per-cycle feed slot with the SCAN
+    line instead of permanently displacing it (the view shows only the last emit).
+    LOUD when the bulk surface is blind/errored -- emit every cycle, because that
+    is the actionable state and a persistent blind read must not hide behind the
+    board. QUIET hourly heartbeat when healthy -- emit at :00 only, so SCAN owns
+    the other three of every four 15-min cycles. Stateless: keyed on the wall
+    minute, no persisted cycle counter (which .state/ could not hold anyway)."""
+    disc = metrics.get("discovery") if isinstance(metrics, dict) else None
+    if not isinstance(disc, dict):
+        return False
+    healthy = str(disc.get("source", "")) in ("tickers", "ticker")
+    return (not healthy) or (int(minute) == 0)
+
+
 def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
                          tail: str, fate, follow: bool = True, disc: str = "") -> str:
     """v0.9.17: the SITREP tool surfaces only the LAST per-cycle close-signal. Every
@@ -1107,6 +1152,27 @@ def run() -> None:
         )
     except Exception:
         pass  # the SCAN line is diagnostic-only; never let it break the cycle
+
+    # v0.9.44: dedicated discovery-source marker. The Recent-Signals view shows
+    # ONE signal per cycle (the last emit), and the SCAN line's d: token is
+    # budget-dropped on every scored board, so 'is the bulk surface live/blind?'
+    # was unanswerable through the operator's read-path (metrics.discovery is a
+    # confirmed hard wall -- tools expose config only). Emit DISC as the LAST
+    # signal when due so it claims the visible slot: loud while blind, an hourly
+    # heartbeat while healthy. Diagnostic-only (confidence 0.111; the symbol is
+    # not a tradable pair, so it can never open/close); fail-open like SCAN.
+    try:
+        _disc_marker = _discovery_marker(decision.get("metrics", {}))
+        if _disc_marker and _discovery_marker_due(
+                decision.get("metrics", {}), datetime.now(timezone.utc).minute):
+            runtime.emit_signal(
+                action="close", symbol=_disc_marker, confidence=0.111,
+                metrics={"discovery": decision.get("metrics", {}).get("discovery"),
+                         "analysis_version": ANALYSIS_VERSION},
+                meta={"discovery_marker": _disc_marker},
+            )
+    except Exception:
+        pass  # diagnostic-only; never let the marker break the cycle
 
 
 if __name__ == "__main__":
