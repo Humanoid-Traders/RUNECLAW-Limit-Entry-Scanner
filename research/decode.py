@@ -153,6 +153,10 @@ def main():
             print(f"  UNPARSED discovery marker: {line}")
             return
         src, n, sym, score = m.groups()
+        # v0.9.48: source may carry an enumeration diagnostic "<src>;e=<diag>"
+        enum_diag = ""
+        if ";e=" in src:
+            src, enum_diag = src.split(";e=", 1)
         if src in ("tickers", "ticker"):
             verdict = "bulk ticker surface LIVE -- forward test is collecting"
         elif src == "derivatives_tickers":
@@ -169,6 +173,19 @@ def main():
         else:
             verdict = "source=" + src
         print(f"  source: {src} -> {verdict}")
+        if enum_diag:
+            if enum_diag == "nomethod":
+                d = "crypto.derivatives_tickers() ABSENT on the SDK -- enumeration dead, watchlist is the path"
+            elif enum_diag == "rows0":
+                d = "derivatives_tickers() returned 0 rows (exists but empty)"
+            elif enum_diag.startswith("err:"):
+                d = "derivatives_tickers() raised " + enum_diag[4:]
+            elif enum_diag.startswith("m0of"):
+                d = ("rows returned but 0 matched the venue/perp/USDT/floor filter; "
+                     "sample row -> " + enum_diag.split(":", 1)[1] + "  (market/symbol/volume format names the fix)")
+            else:
+                d = enum_diag
+            print(f"  ENUM DIAG (why derivatives_tickers was empty): {d}")
         print(f"  candidates scored this cycle: {n}")
         print(f"  top candidate: {sym} score {score}" if sym
               else "  top candidate: none scored this cycle")

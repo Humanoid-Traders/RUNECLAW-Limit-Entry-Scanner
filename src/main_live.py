@@ -50,7 +50,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.47"
+ANALYSIS_VERSION = "0.9.48"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -879,8 +879,10 @@ def _discovery_marker_due(metrics: dict, minute: int) -> bool:
     # v0.9.45: the per-symbol "watchlist" fallback is a WORKING (if degraded)
     # read, so it heartbeats hourly like a healthy bulk read -- only a truly
     # blind/errored surface shouts every cycle.
-    healthy = str(disc.get("source", "")) in (
-        "tickers", "ticker", "derivatives_tickers", "watchlist")
+    # v0.9.48: source may carry a diagnostic suffix "watchlist;e=<diag>" -- the
+    # base source (before ';') decides health, so cadence is unchanged.
+    base_src = str(disc.get("source", "")).split(";", 1)[0]
+    healthy = base_src in ("tickers", "ticker", "derivatives_tickers", "watchlist")
     return (not healthy) or (0 <= int(minute) < 15)
 
 
