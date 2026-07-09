@@ -171,6 +171,37 @@ def test_discovery_classes_restrict():
     _assert(syms == ["EVAAUSDT"], "discovery_classes=crypto excludes the stock: " + str(syms))
 
 
+def test_discovery_marker():
+    # v0.9.44: dedicated DISC-<source> line for the Recent-Signals view (the SCAN
+    # d: token is budget-dropped on scored boards, so it can't answer live/blind)
+    live = {"discovery": {"source": "tickers", "candidates": [
+        {"symbol": "EVAAUSDT", "score": 72.0}, {"symbol": "BLURUSDT", "score": 85.4}]}}
+    _assert(ml._discovery_marker(live) == "DISC-tickers-2c-BLUR85",
+            "live bulk surface -> " + ml._discovery_marker(live))
+    blind = {"discovery": {"source": "no_bulk_surface", "candidates": []}}
+    _assert(ml._discovery_marker(blind) == "DISC-no_bulk_surface-0c",
+            "blind surface -> DISC-no_bulk_surface-0c")
+    err = {"discovery": {"source": "error:AttributeError", "candidates": []}}
+    _assert(ml._discovery_marker(err) == "DISC-error:AttributeError-0c",
+            "exception path -> DISC-error:...-0c")
+    _assert(ml._discovery_marker({}) == "", "discovery off -> empty marker (no behaviour change)")
+    # un-scored candidate (a class with no leader this run) -> counted, no top token
+    unscored = {"discovery": {"source": "tickers", "candidates": [{"symbol": "CLUSDT", "score": None}]}}
+    _assert(ml._discovery_marker(unscored) == "DISC-tickers-1c",
+            "un-scored candidate counted, no top token: " + ml._discovery_marker(unscored))
+
+
+def test_discovery_marker_cadence():
+    # LOUD every cycle while blind/errored; hourly (:00) heartbeat while healthy
+    blind = {"discovery": {"source": "no_bulk_surface", "candidates": []}}
+    _assert(ml._discovery_marker_due(blind, 17) and ml._discovery_marker_due(blind, 0),
+            "blind -> due every cycle (loud)")
+    live = {"discovery": {"source": "tickers", "candidates": [{"symbol": "BLURUSDT", "score": 85.4}]}}
+    _assert(ml._discovery_marker_due(live, 0) and not ml._discovery_marker_due(live, 15),
+            "healthy -> due only at :00 (hourly heartbeat), SCAN owns other cycles")
+    _assert(not ml._discovery_marker_due({}, 0), "discovery off -> never due")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

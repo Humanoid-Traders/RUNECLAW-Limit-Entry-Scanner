@@ -143,6 +143,31 @@ def main():
     window = [float(x) for x in a.window.split()] if a.window.strip() else []
 
     line = a.line.strip()
+    if line.startswith("DISC-"):
+        # v0.9.44 discovery-source marker: DISC-<source>-<n>c[-<SYM><score>].
+        # A dedicated line because the SCAN `d:` token is budget-dropped on every
+        # scored 3-universe board -- this is what answers 'bulk live or blind?'.
+        m = re.match(r"^DISC-(.+?)-(\d+)c(?:-([A-Z0-9]+?)(\d{1,3}))?$", line)
+        print("=== discovery marker (v0.9.44) ===")
+        if not m:
+            print(f"  UNPARSED discovery marker: {line}")
+            return
+        src, n, sym, score = m.groups()
+        if src in ("tickers", "ticker"):
+            verdict = "bulk ticker surface LIVE -- forward test is collecting"
+        elif src == "no_bulk_surface":
+            verdict = ("BLIND -- no bulk SDK surface found (fail-open); the "
+                       "SDK-native per-symbol fallback is warranted")
+        elif src.startswith("error:"):
+            verdict = "EXCEPTION path -- discovery raised " + src.split(":", 1)[1]
+        else:
+            verdict = "source=" + src
+        print(f"  source: {src} -> {verdict}")
+        print(f"  candidates scored this cycle: {n}")
+        print(f"  top candidate: {sym} score {score}" if sym
+              else "  top candidate: none scored this cycle")
+        print("  NOTE: LOUD every cycle while blind/errored; hourly (:00) heartbeat while healthy.")
+        return
     if line.startswith("SCAN-"):
         line = line[5:]
     segs = line.split("|")

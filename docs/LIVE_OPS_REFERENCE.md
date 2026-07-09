@@ -62,6 +62,22 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   the token degrades gracefully: full → 4-char stage form → dropped.
 - `d:<SYM><score>` trailing segment (v0.9.41) = the **shadow-discovery**
   forward test's top-scoring candidate this cycle. **Multi-class since v0.9.42** (operator "add all"): the scan covers every asset class Bitget lists — crypto (BTC-gated), tokenized stocks + ETFs (QQQ-gated), commodities (XAU-gated) — each routed to its correct regime leader. LOGGED only, NEVER traded (the full per-class list with class+leader tags is in `metrics.discovery`); the token shows only the single top-scored name. Lowest budget priority. Armed 2026-07-08.
+  **CAVEAT (proven live 2026-07-09): this token is near-unobservable** — a scored
+  3-universe digest is ~42 of the 63 chars, so `d:` is budget-dropped on every
+  real board (10/10 consecutive live lines carried none). Do NOT read its
+  absence as "discovery blind." Use the dedicated `DISC-` line below instead.
+- **`DISC-<source>-<n>c[-<SYM><score>]`** dedicated marker (v0.9.44) = the
+  discovery forward-test's health, emitted as its **own signal line** (the
+  Recent-Signals view shows one signal per cycle; this claims that slot when
+  due). It exists because the `d:` token above is budget-dead and
+  `metrics.discovery` is unreachable through the operator's tools (config-level
+  only). Read `source`: **`tickers`/`ticker` = bulk surface LIVE** (forward test
+  collecting), **`no_bulk_surface` = BLIND** (SDK-native per-symbol fallback
+  warranted), **`error:<Type>` = exception path**. `<n>c` = candidate count;
+  optional `-<SYM><score>` = top scored candidate. Cadence: **LOUD every cycle
+  while blind/errored** (a persistent blind read must not hide behind the board),
+  a **quiet hourly (:00) heartbeat while healthy** so SCAN owns the other cycles.
+  Decode with `python3 research/decode.py "DISC-..."`. Diagnostic-only, never trades.
 - `cx` suffix = circuit/ops notes, when present (v0.9.39): `-cx` = the legacy
   equity circuit is non-functional (state never persists — historical); `-dw` =
   account-day realized past the Rule-10 warn line (warn only, entries flow);
