@@ -203,6 +203,43 @@ def test_discovery_watchlist_fallback():
     _assert(how2 == "no_bulk_surface", "bulk blind + empty watchlist -> no_bulk_surface")
 
 
+def test_discovery_derivatives_enumeration():
+    # v0.9.46: futures.tickers absent -> enumerate via crypto.derivatives_tickers,
+    # then fetch_symbol the top-by-volume for full features + scoring
+    def drv():
+        return [
+            {"market": "Bitget Futures", "symbol": "NEWCOINUSDT", "contract_type": "perpetual", "volume_24h": 2e8},
+            {"market": "Bitget", "symbol": "MIDUSDT", "contract_type": "perpetual", "volume_24h": 5e7},
+            {"market": "Bitget", "symbol": "THINUSDT", "contract_type": "perpetual", "volume_24h": 1e6},   # sub-floor
+            {"market": "Binance", "symbol": "OTHERUSDT", "contract_type": "perpetual", "volume_24h": 9e9},  # wrong venue
+            {"market": "Bitget", "symbol": "BTCUSDT", "contract_type": "perpetual", "volume_24h": 9e9},     # core (excluded)
+            {"market": "Bitget", "symbol": "DATEDUSDT", "contract_type": "futures", "volume_24h": 3e8},     # dated, not perp
+        ]
+    features.data.crypto = types.SimpleNamespace(
+        futures=types.SimpleNamespace(), derivatives_tickers=drv)   # no bulk futures surface
+    probe = {
+        "NEWCOINUSDT": features.SymbolFeatures(symbol="NEWCOINUSDT", ok=True, last=2.0,
+            vwap=2.0, high=2.2, low=1.8, quote_volume=2e8, change_pct=12.0),
+        "MIDUSDT": features.SymbolFeatures(symbol="MIDUSDT", ok=True, last=1.0,
+            vwap=1.0, high=1.1, low=0.9, quote_volume=5e7, change_pct=3.0),
+    }
+    features.fetch_symbol = lambda sym, exchange="bitget": probe.get(
+        sym, features.SymbolFeatures(symbol=sym, ok=False))
+    cfg = {"discovery_min_volume_usdt": "30000000", "discovery_max_per_class": 4,
+           "discovery_probe_max": 12}
+    got, how = features.discovery_scan({"BTCUSDT"}, cfg)
+    _assert(how == "derivatives_tickers", "bulk blind + derivatives feed -> source: " + how)
+    syms = [f.symbol for f, cls in got]
+    _assert(syms == ["NEWCOINUSDT", "MIDUSDT"],
+            "venue+perp+floor+core filters, volume-ranked, fetched+scored: " + str(syms))
+    en = features._discovery_enumerate({"BTCUSDT"}, set(), 3e7)
+    _assert(en == ["NEWCOINUSDT", "MIDUSDT"], "enumerate keeps venue perps by volume: " + str(en))
+    # toggle off -> enumeration skipped -> no watchlist -> no_bulk_surface
+    cfg_off = dict(cfg); cfg_off["discovery_enumerate"] = "0"
+    _, how_off = features.discovery_scan({"BTCUSDT"}, cfg_off)
+    _assert(how_off == "no_bulk_surface", "discovery_enumerate=0 + no watchlist -> no_bulk_surface: " + how_off)
+
+
 def test_discovery_marker():
     # v0.9.44: dedicated DISC-<source> line for the Recent-Signals view (the SCAN
     # d: token is budget-dropped on scored boards, so it can't answer live/blind)

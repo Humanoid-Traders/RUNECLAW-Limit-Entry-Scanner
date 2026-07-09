@@ -662,21 +662,28 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         except Exception:
             continue
     if not rows:
-        # v0.9.45 -- BULK SURFACE BLIND (confirmed live 2026-07-09: the SDK has no
-        # tickers()/ticker(symbol="") -- DISC-no_bulk_surface every cycle). Fall
-        # back to probing a BOUNDED, explicitly-named watchlist per-symbol via the
-        # proven single-symbol read (fetch_symbol -> ticker(symbol=X), the exact
-        # call the core 28 already use). HONEST LIMITATION: this can only see names
-        # we NAME -- it cannot enumerate the venue, so it monitors known non-core
-        # names (RWA + any curated crypto) and CANNOT catch a brand-new unknown
-        # listing the way a real bulk read would. Bounded at discovery_probe_max
-        # symbols/cycle to cap the added ticker cost; fail-open per symbol.
+        # No futures.tickers()/ticker(symbol="") bulk row-set (confirmed live
+        # 2026-07-09: DISC-no_bulk_surface -- that path never existed). Two
+        # fallbacks, in order of capability:
+        try:
+            probe_max = int(cfg.get("discovery_probe_max", 12))
+        except (TypeError, ValueError):
+            probe_max = 12
+        # v0.9.46 -- REAL bulk surface: crypto.derivatives_tickers() (one level up
+        # from futures) enumerates EVERY venue perp with 24h USD volume. It lacks
+        # vwap/high/low, so use it as an ENUMERATION: rank the venue's USDT perps
+        # by volume and fetch_symbol the top-N for full features + scoring. Unlike
+        # the named watchlist this CATCHES UNKNOWN LISTINGS (the original purpose).
+        enum_on = str(cfg.get("discovery_enumerate", "1")).strip().lower() in ("1", "true", "yes")
+        enum_syms = _discovery_enumerate(exclude, block, min_qv, exchange) if enum_on else []
+        if enum_syms:
+            return (_discovery_watchlist_scan(
+                enum_syms, exclude, block, want, min_qv, per_class, probe_max,
+                exchange), "derivatives_tickers")
+        # v0.9.45 -- last resort: probe an explicitly-named watchlist per-symbol
+        # (known RWA/crypto names only; cannot catch unknowns). Fail-open.
         watchlist = cfg.get("discovery_watchlist") or []
         if watchlist:
-            try:
-                probe_max = int(cfg.get("discovery_probe_max", 12))
-            except (TypeError, ValueError):
-                probe_max = 12
             return (_discovery_watchlist_scan(
                 watchlist, exclude, block, want, min_qv, per_class, probe_max,
                 exchange), "watchlist")
@@ -722,6 +729,51 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         seen[cls] = n + 1
         capped.append((f, cls))
     return capped, how
+
+
+def _discovery_enumerate(exclude, block, min_qv, exchange="bitget"):
+    """v0.9.46 -- enumerate venue perps via the bulk crypto.derivatives_tickers()
+    feed (the futures.tickers path never existed live). It carries symbol +
+    24h USD volume + contract_type across markets but NOT vwap/high/low, so it
+    serves only as an ENUMERATION: return the venue's USDT perpetual symbols
+    above the volume floor, ranked by volume desc, for the per-symbol fetch stage
+    to score. This is what restores UNKNOWN-listing capture. Fail-open: a missing
+    method / any error / empty feed -> [] (caller then tries the watchlist)."""
+    try:
+        fn = getattr(data.crypto, "derivatives_tickers", None)
+        if fn is None:
+            return []
+        obb = fn()
+        rows = _to_records(obb)
+        if not rows and isinstance(obb, (list, tuple)):
+            rows = [r for r in (_model_dict(x) or (x if isinstance(x, dict) else None)
+                                for x in obb) if r]
+    except Exception:
+        return []
+    scored = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        market = str(row.get("market", "") or "").lower()
+        if exchange.lower() not in market:          # keep only the target venue
+            continue
+        ctype = str(row.get("contract_type", "") or "").lower()
+        if ctype and "perp" not in ctype:           # perpetuals only (skip dated)
+            continue
+        sym = str(row.get("symbol", "") or "").upper().replace("_", "").replace("-", "")
+        if (not sym.endswith("USDT") or sym in exclude
+                or sym[:-4] in block or sym in block):
+            continue
+        vol = _f(row.get("volume_24h"))
+        if vol is None or vol < min_qv:
+            continue
+        scored.append((sym, vol))
+    scored.sort(key=lambda sv: sv[1], reverse=True)
+    seen, ordered = set(), []
+    for sym, _v in scored:                          # dedupe, preserve volume rank
+        if sym not in seen:
+            seen.add(sym); ordered.append(sym)
+    return ordered
 
 
 def _discovery_watchlist_scan(watchlist, exclude, block, want, min_qv,

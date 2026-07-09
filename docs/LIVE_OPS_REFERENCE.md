@@ -71,13 +71,16 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   Recent-Signals view shows one signal per cycle; this claims that slot when
   due). It exists because the `d:` token above is budget-dead and
   `metrics.discovery` is unreachable through the operator's tools (config-level
-  only). Read `source`: **`tickers`/`ticker` = bulk surface LIVE** (forward test
-  collecting), **`watchlist` = per-symbol FALLBACK active** (v0.9.45 — bulk blind,
-  probing the named `discovery_watchlist`; monitors known names only, cannot catch
-  UNKNOWN listings), **`no_bulk_surface` = BLIND with no watchlist configured**,
-  **`error:<Type>` = exception path**. Confirmed live 2026-07-09: the venue's SDK
-  has **no bulk ticker method**, so the bulk read is permanently blind — the
-  `watchlist` fallback is the working path. `<n>c` = candidate count;
+  only). Read `source`: **`tickers`/`ticker` = legacy bulk surface** (never
+  existed live), **`derivatives_tickers` = REAL bulk enumeration** (v0.9.46 —
+  `crypto.derivatives_tickers()` ranks the venue's perps by 24h volume, then
+  `fetch_symbol` scores the top-N; **catches UNKNOWN listings**), **`watchlist` =
+  named per-symbol fallback** (v0.9.45 — enumeration empty/off; known names only,
+  no unknowns), **`no_bulk_surface` = BLIND, no watchlist**, **`error:<Type>` =
+  exception path**. History: v0.9.44 found `no_bulk_surface` because the probe
+  used the wrong path (`futures.tickers`); the real bulk feed is one level up
+  (`crypto.derivatives_tickers`), wired in v0.9.46. Fallback order:
+  derivatives_tickers → watchlist → blind. `<n>c` = candidate count;
   optional `-<SYM><score>` = top scored candidate. Cadence: **LOUD every cycle
   while blind/errored** (a persistent blind read must not hide behind the board),
   a **quiet hourly (:00) heartbeat while healthy** so SCAN owns the other cycles.

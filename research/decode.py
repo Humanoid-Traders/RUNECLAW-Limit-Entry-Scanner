@@ -155,6 +155,9 @@ def main():
         src, n, sym, score = m.groups()
         if src in ("tickers", "ticker"):
             verdict = "bulk ticker surface LIVE -- forward test is collecting"
+        elif src == "derivatives_tickers":
+            verdict = ("REAL bulk enumeration LIVE (v0.9.46) -- derivatives_tickers "
+                       "feed ranked the venue's perps by volume; catches UNKNOWN listings")
         elif src == "watchlist":
             verdict = ("per-symbol FALLBACK active (v0.9.45) -- bulk surface blind, "
                        "probing the named discovery_watchlist; cannot catch UNKNOWN listings")

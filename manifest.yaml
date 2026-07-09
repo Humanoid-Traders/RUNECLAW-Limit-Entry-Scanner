@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.45"
+version: "0.9.46"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -213,6 +213,22 @@ strategy_config:
     "ANTHROPICUSDT", "OPENAIUSDT", "SMHUSDT", "SOXLUSDT", "KWEBUSDT",
     "CLUSDT", "BZUSDT", "NATGASUSDT"]
   discovery_probe_max: 12
+  # v0.9.46 -- REAL bulk surface found. The SDK reference shows the bulk feed is
+  # crypto.derivatives_tickers() (one level UP from futures) -- futures.tickers
+  # never existed, which is why v0.9.44 read no_bulk_surface. derivatives_tickers
+  # returns every venue perp with 24h USD volume + contract_type, but NOT
+  # vwap/high/low, so features._discovery_enumerate uses it as an ENUMERATION:
+  # rank the venue's USDT perps by volume, then fetch_symbol the top probe_max
+  # for full features + scoring. This RESTORES unknown-listing capture (the one
+  # thing the named watchlist can't do). Fallback order in discovery_scan:
+  # derivatives_tickers enumeration -> named watchlist -> no_bulk_surface; the
+  # DISC source names which fired (DISC-derivatives_tickers-<n>c-<SYM><score>).
+  # NEEDS LIVE VALIDATION on deploy: the market-name match ("bitget" substring)
+  # and the symbol format from this CoinGecko-style feed are unverified offline
+  # -- read the first DISC line. derivatives_tickers-<n>c with n>0 = working;
+  # -0c = feed returned but nothing matched the venue/floor (tune the match);
+  # watchlist = enumeration empty, degraded to the named list. STILL SHADOW.
+  discovery_enumerate: "1"
   # min_score DEFENDED both ways (2026-07-06 sweep, 35d live baseline): 65 loses
   # 11pt net (slot/correlation dynamics -- more qualifiers, fewer completed
   # trades) and 75 is catastrophic (PF 0.58; the 70-75 band holds the profitable
