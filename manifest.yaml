@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.46"
+version: "0.9.47"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -229,6 +229,14 @@ strategy_config:
   # -0c = feed returned but nothing matched the venue/floor (tune the match);
   # watchlist = enumeration empty, degraded to the named list. STILL SHADOW.
   discovery_enumerate: "1"
+  # v0.9.47 -- DISC heartbeat cadence fix (main_live._discovery_marker_due). The
+  # live 0.6.41 instance fired cycles at :03/:18/:33/:48 (a schedule offset), so
+  # the exact minute==0 heartbeat NEVER matched and a HEALTHY discovery source
+  # (derivatives_tickers/watchlist) went silent -- we couldn't read the
+  # enumeration verdict at all. Widened to minute<15 (fires on whichever cycle
+  # lands in the first quarter-hour), robust to any offset, still exactly once
+  # per hour. Blind/errored sources are unchanged (loud every cycle). This is
+  # what finally lets the healthy DISC line surface on the next deploy.
   # min_score DEFENDED both ways (2026-07-06 sweep, 35d live baseline): 65 loses
   # 11pt net (slot/correlation dynamics -- more qualifiers, fewer completed
   # trades) and 75 is catastrophic (PF 0.58; the 70-75 band holds the profitable

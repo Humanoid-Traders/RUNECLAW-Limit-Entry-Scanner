@@ -261,13 +261,17 @@ def test_discovery_marker():
 
 
 def test_discovery_marker_cadence():
-    # LOUD every cycle while blind/errored; hourly (:00) heartbeat while healthy
+    # LOUD every cycle while blind/errored; hourly heartbeat (first cycle of the
+    # hour, minute < 15) while healthy -- v0.9.47 widened == 0 to < 15 because the
+    # live schedule fires offset (:03/:18/:33/:48), so == 0 never matched.
     blind = {"discovery": {"source": "no_bulk_surface", "candidates": []}}
     _assert(ml._discovery_marker_due(blind, 17) and ml._discovery_marker_due(blind, 0),
             "blind -> due every cycle (loud)")
     live = {"discovery": {"source": "tickers", "candidates": [{"symbol": "BLURUSDT", "score": 85.4}]}}
-    _assert(ml._discovery_marker_due(live, 0) and not ml._discovery_marker_due(live, 15),
-            "healthy -> due only at :00 (hourly heartbeat), SCAN owns other cycles")
+    _assert(ml._discovery_marker_due(live, 0) and ml._discovery_marker_due(live, 3),
+            "healthy -> due on the first cycle of the hour, incl. an offset :03")
+    _assert(not ml._discovery_marker_due(live, 18) and not ml._discovery_marker_due(live, 33),
+            "healthy -> NOT due on later cycles (:18/:33) -> once per hour, SCAN owns the rest")
     _assert(not ml._discovery_marker_due({}, 0), "discovery off -> never due")
 
 

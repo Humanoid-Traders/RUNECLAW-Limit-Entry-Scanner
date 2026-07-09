@@ -50,7 +50,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.46"
+ANALYSIS_VERSION = "0.9.47"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -866,9 +866,13 @@ def _discovery_marker_due(metrics: dict, minute: int) -> bool:
     line instead of permanently displacing it (the view shows only the last emit).
     LOUD when the bulk surface is blind/errored -- emit every cycle, because that
     is the actionable state and a persistent blind read must not hide behind the
-    board. QUIET hourly heartbeat when healthy -- emit at :00 only, so SCAN owns
-    the other three of every four 15-min cycles. Stateless: keyed on the wall
-    minute, no persisted cycle counter (which .state/ could not hold anyway)."""
+    board. QUIET hourly heartbeat when healthy -- emit on the FIRST cycle of each
+    hour (minute < 15) so SCAN owns the other three of every four 15-min cycles.
+    Stateless: keyed on the wall minute, no persisted cycle counter.
+    v0.9.47: widened from `== 0` to `< 15`. Live 0.6.41 fired cycles at :03/:18/
+    :33/:48 (a schedule offset), so the exact `== 0` heartbeat NEVER matched and
+    a healthy source went silent. `< 15` catches whatever cycle lands in the
+    first quarter-hour, robust to any offset -- still exactly once per hour."""
     disc = metrics.get("discovery") if isinstance(metrics, dict) else None
     if not isinstance(disc, dict):
         return False
@@ -877,7 +881,7 @@ def _discovery_marker_due(metrics: dict, minute: int) -> bool:
     # blind/errored surface shouts every cycle.
     healthy = str(disc.get("source", "")) in (
         "tickers", "ticker", "derivatives_tickers", "watchlist")
-    return (not healthy) or (int(minute) == 0)
+    return (not healthy) or (0 <= int(minute) < 15)
 
 
 def _fold_exec_onto_scan(scan_digest: str, own, pT, bkr: str, cbx: str,
