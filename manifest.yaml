@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.47"
+version: "0.9.48"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -237,6 +237,15 @@ strategy_config:
   # lands in the first quarter-hour), robust to any offset, still exactly once
   # per hour. Blind/errored sources are unchanged (loud every cycle). This is
   # what finally lets the healthy DISC line surface on the next deploy.
+  # v0.9.48 -- enumeration DIAGNOSTIC. Live 0.6.42's DISC read 'watchlist', not
+  # 'derivatives_tickers', so _discovery_enumerate came back empty and (metrics
+  # unreadable) we could not see why. It now returns a diag that rides the DISC
+  # source as "watchlist;e=<diag>": nomethod / err:<Type> / rows0 / ok /
+  # m0of<N>:<market>/<symbol>/v<0|1> (N rows, 0 matched -> a sample of the first
+  # row's venue string + symbol format + volume presence, which names the fix in
+  # ONE deploy). Also normalizes SWAP/PERP/slash symbol formats to BTCUSDT. Read
+  # the next DISC line: "m0of<big>:bitget/..." = filter tune; "nomethod" =
+  # enumeration dead (watchlist stays); "ok" would mean it now works.
   # min_score DEFENDED both ways (2026-07-06 sweep, 35d live baseline): 65 loses
   # 11pt net (slot/correlation dynamics -- more qualifiers, fewer completed
   # trades) and 75 is catastrophic (PF 0.58; the 70-75 band holds the profitable

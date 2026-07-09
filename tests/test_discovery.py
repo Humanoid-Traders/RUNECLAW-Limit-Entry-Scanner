@@ -76,8 +76,10 @@ def test_discovery_vwap_derived_from_volumes():
 def test_discovery_failopen_no_bulk_surface():
     features.data.crypto = types.SimpleNamespace(futures=types.SimpleNamespace())
     got, note = features.discovery_scan(set(), CFG)
-    _assert(got == [] and note == "no_bulk_surface",
-            "no bulk SDK surface -> empty + named note (fail-open)")
+    # v0.9.48: with no futures bulk AND no derivatives_tickers method AND no
+    # watchlist, the note carries the enum diag -> "no_bulk_surface;e=nomethod"
+    _assert(got == [] and note == "no_bulk_surface;e=nomethod",
+            "no bulk SDK surface -> empty + named note w/ enum diag (fail-open): " + note)
 
 
 def test_extra_symbols_merge():
@@ -189,7 +191,8 @@ def test_discovery_watchlist_fallback():
            "discovery_probe_max": 12,
            "discovery_watchlist": ["ASMLUSDT", "CLUSDT", "THINUSDT", "BROKENUSDT", "BTCUSDT"]}
     got, how = features.discovery_scan({"BTCUSDT"}, cfg)
-    _assert(how == "watchlist", "bulk blind + watchlist -> source 'watchlist': " + how)
+    # v0.9.48: source carries the enum diag -> "watchlist;e=nomethod" (no derivatives_tickers here)
+    _assert(how.split(";")[0] == "watchlist", "bulk blind + watchlist -> base source 'watchlist': " + how)
     by = {f.symbol: cls for f, cls in got}
     _assert(by == {"ASMLUSDT": "equities", "CLUSDT": "metals"},
             "floor(THIN)+ok(BROKEN)+exclusion(BTC) applied, classes routed: " + str(by))
@@ -198,9 +201,9 @@ def test_discovery_watchlist_fallback():
     got1, _ = features.discovery_scan({"BTCUSDT"}, cfg1)
     _assert([f.symbol for f, c in got1] == ["ASMLUSDT"],
             "probe_max=1 reads only the first name: " + str([f.symbol for f, c in got1]))
-    # bulk blind + NO watchlist -> stays no_bulk_surface (unchanged fail-open)
+    # bulk blind + NO watchlist -> no_bulk_surface (base), with enum diag suffix
     _, how2 = features.discovery_scan(set(), {"discovery_watchlist": []})
-    _assert(how2 == "no_bulk_surface", "bulk blind + empty watchlist -> no_bulk_surface")
+    _assert(how2.split(";")[0] == "no_bulk_surface", "bulk blind + empty watchlist -> no_bulk_surface: " + how2)
 
 
 def test_discovery_derivatives_enumeration():
@@ -232,12 +235,33 @@ def test_discovery_derivatives_enumeration():
     syms = [f.symbol for f, cls in got]
     _assert(syms == ["NEWCOINUSDT", "MIDUSDT"],
             "venue+perp+floor+core filters, volume-ranked, fetched+scored: " + str(syms))
-    en = features._discovery_enumerate({"BTCUSDT"}, set(), 3e7)
-    _assert(en == ["NEWCOINUSDT", "MIDUSDT"], "enumerate keeps venue perps by volume: " + str(en))
-    # toggle off -> enumeration skipped -> no watchlist -> no_bulk_surface
+    en, diag = features._discovery_enumerate({"BTCUSDT"}, set(), 3e7)
+    _assert(en == ["NEWCOINUSDT", "MIDUSDT"] and diag == "ok",
+            "enumerate keeps venue perps by volume, diag ok: " + str(en) + "/" + diag)
+    # toggle off -> enumeration skipped -> no watchlist -> no_bulk_surface;e=off
     cfg_off = dict(cfg); cfg_off["discovery_enumerate"] = "0"
     _, how_off = features.discovery_scan({"BTCUSDT"}, cfg_off)
-    _assert(how_off == "no_bulk_surface", "discovery_enumerate=0 + no watchlist -> no_bulk_surface: " + how_off)
+    _assert(how_off == "no_bulk_surface;e=off",
+            "discovery_enumerate=0 -> no_bulk_surface;e=off: " + how_off)
+    # v0.9.48 diag: method absent -> 'nomethod'; the diag rides the watchlist source
+    features.data.crypto = types.SimpleNamespace(futures=types.SimpleNamespace())  # no derivatives_tickers
+    en2, diag2 = features._discovery_enumerate(set(), set(), 3e7)
+    _assert(en2 == [] and diag2 == "nomethod", "no derivatives_tickers method -> diag nomethod: " + diag2)
+    # v0.9.48 diag: rows returned but 0 matched -> sampled 'm0of<N>:...' (SWAP suffix normalizes)
+    features.data.crypto = types.SimpleNamespace(
+        futures=types.SimpleNamespace(),
+        derivatives_tickers=lambda: [{"market": "Binance", "symbol": "OTHERUSDT",
+                                      "contract_type": "perpetual", "volume_24h": 9e9}])
+    en3, diag3 = features._discovery_enumerate({"BTCUSDT"}, set(), 3e7)
+    _assert(en3 == [] and diag3.startswith("m0of1:") and "Binance" in diag3,
+            "0-match samples the first row for diagnosis: " + diag3)
+    # SWAP/slash symbol formats normalize to a plain USDT perp
+    features.data.crypto = types.SimpleNamespace(
+        futures=types.SimpleNamespace(),
+        derivatives_tickers=lambda: [{"market": "bitget", "symbol": "NEW-USDT-SWAP",
+                                      "contract_type": "perpetual", "volume_24h": 8e7}])
+    en4, diag4 = features._discovery_enumerate(set(), set(), 3e7)
+    _assert(en4 == ["NEWUSDT"] and diag4 == "ok", "BTC-USDT-SWAP-style normalizes to NEWUSDT: " + str(en4))
 
 
 def test_discovery_marker():

@@ -675,19 +675,23 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         # by volume and fetch_symbol the top-N for full features + scoring. Unlike
         # the named watchlist this CATCHES UNKNOWN LISTINGS (the original purpose).
         enum_on = str(cfg.get("discovery_enumerate", "1")).strip().lower() in ("1", "true", "yes")
-        enum_syms = _discovery_enumerate(exclude, block, min_qv, exchange) if enum_on else []
+        enum_syms, enum_diag = (_discovery_enumerate(exclude, block, min_qv, exchange)
+                                if enum_on else ([], "off"))
         if enum_syms:
             return (_discovery_watchlist_scan(
                 enum_syms, exclude, block, want, min_qv, per_class, probe_max,
                 exchange), "derivatives_tickers")
         # v0.9.45 -- last resort: probe an explicitly-named watchlist per-symbol
         # (known RWA/crypto names only; cannot catch unknowns). Fail-open.
+        # v0.9.48 -- carry the enumeration diag (why it was empty) on the source so
+        # it rides the DISC line: "watchlist;e=<diag>". The marker treats the part
+        # before ';' as the (healthy) source, so cadence is unchanged.
         watchlist = cfg.get("discovery_watchlist") or []
         if watchlist:
             return (_discovery_watchlist_scan(
                 watchlist, exclude, block, want, min_qv, per_class, probe_max,
-                exchange), "watchlist")
-        return [], "no_bulk_surface"
+                exchange), "watchlist;e=" + enum_diag)
+        return [], "no_bulk_surface;e=" + enum_diag
     out = []
     for row in rows:
         sym = str(row.get("symbol", "") or "").upper().replace("_", "").replace("-", "")
@@ -737,30 +741,47 @@ def _discovery_enumerate(exclude, block, min_qv, exchange="bitget"):
     24h USD volume + contract_type across markets but NOT vwap/high/low, so it
     serves only as an ENUMERATION: return the venue's USDT perpetual symbols
     above the volume floor, ranked by volume desc, for the per-symbol fetch stage
-    to score. This is what restores UNKNOWN-listing capture. Fail-open: a missing
-    method / any error / empty feed -> [] (caller then tries the watchlist)."""
+    to score. This is what restores UNKNOWN-listing capture.
+
+    v0.9.48 -- returns (symbols, diag). Live 0.6.42 came back empty (DISC read
+    'watchlist', not 'derivatives_tickers') and metrics are unreadable, so the
+    diag rides the DISC line to pinpoint WHY in one deploy: 'nomethod' (SDK lacks
+    it), 'err:<Type>', 'rows0' (returned nothing), 'ok' (matched), or
+    'm0of<N>:<market>/<symbol>/v<0|1>' (N rows, 0 matched -> sample the first
+    row's venue string + symbol format + volume presence, which names the fix).
+    Fail-open everywhere. Symbol normalize also strips '/' and a trailing SWAP/PERP
+    tag so common perp formats (BTC-USDT-SWAP, BTC/USDT) resolve to BTCUSDT."""
     try:
         fn = getattr(data.crypto, "derivatives_tickers", None)
         if fn is None:
-            return []
+            return [], "nomethod"
         obb = fn()
         rows = _to_records(obb)
         if not rows and isinstance(obb, (list, tuple)):
             rows = [r for r in (_model_dict(x) or (x if isinstance(x, dict) else None)
                                 for x in obb) if r]
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], "err:" + type(exc).__name__
+    rows = [r for r in (rows or []) if isinstance(r, dict)]
+    if not rows:
+        return [], "rows0"
+
+    def _norm(raw):
+        s = str(raw or "").upper().replace("_", "").replace("-", "").replace("/", "")
+        for tag in ("SWAP", "PERP", "PERPETUAL"):
+            if s.endswith("USDT" + tag):
+                s = s[:-len(tag)]
+        return s
+
     scored = []
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
+    for row in rows:
         market = str(row.get("market", "") or "").lower()
         if exchange.lower() not in market:          # keep only the target venue
             continue
         ctype = str(row.get("contract_type", "") or "").lower()
         if ctype and "perp" not in ctype:           # perpetuals only (skip dated)
             continue
-        sym = str(row.get("symbol", "") or "").upper().replace("_", "").replace("-", "")
+        sym = _norm(row.get("symbol", ""))
         if (not sym.endswith("USDT") or sym in exclude
                 or sym[:-4] in block or sym in block):
             continue
@@ -773,7 +794,15 @@ def _discovery_enumerate(exclude, block, min_qv, exchange="bitget"):
     for sym, _v in scored:                          # dedupe, preserve volume rank
         if sym not in seen:
             seen.add(sym); ordered.append(sym)
-    return ordered
+    if ordered:
+        return ordered, "ok"
+    # rows returned but 0 matched -> sample the first row so the DISC line names
+    # the failure (wrong venue string / symbol format / missing volume field).
+    s0 = rows[0]
+    sample = "%s/%s/v%s" % (str(s0.get("market", ""))[:7],
+                            str(s0.get("symbol", ""))[:12],
+                            "1" if _f(s0.get("volume_24h")) is not None else "0")
+    return [], "m0of%d:%s" % (len(rows), sample)
 
 
 def _discovery_watchlist_scan(watchlist, exclude, block, want, min_qv,
