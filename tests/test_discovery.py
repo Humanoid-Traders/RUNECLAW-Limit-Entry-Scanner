@@ -171,6 +171,38 @@ def test_discovery_classes_restrict():
     _assert(syms == ["EVAAUSDT"], "discovery_classes=crypto excludes the stock: " + str(syms))
 
 
+def test_discovery_watchlist_fallback():
+    # v0.9.45: bulk surface BLIND -> probe the named watchlist per-symbol
+    features.data.crypto = types.SimpleNamespace(futures=types.SimpleNamespace())  # no bulk
+    probe = {
+        "ASMLUSDT": features.SymbolFeatures(symbol="ASMLUSDT", ok=True, last=1700.0,
+            vwap=1700.0, high=1750.0, low=1650.0, quote_volume=8e7, change_pct=1.2),
+        "CLUSDT": features.SymbolFeatures(symbol="CLUSDT", ok=True, last=74.0,
+            vwap=74.0, high=75.0, low=73.0, quote_volume=2.5e8, change_pct=4.9),
+        "THINUSDT": features.SymbolFeatures(symbol="THINUSDT", ok=True, last=1.0,
+            vwap=1.0, high=1.1, low=0.9, quote_volume=1e6, change_pct=0.0),   # sub-floor
+        "BROKENUSDT": features.SymbolFeatures(symbol="BROKENUSDT", ok=False),  # not ok
+    }
+    features.fetch_symbol = lambda sym, exchange="bitget": probe.get(
+        sym, features.SymbolFeatures(symbol=sym, ok=False))
+    cfg = {"discovery_min_volume_usdt": "30000000", "discovery_max_per_class": 4,
+           "discovery_probe_max": 12,
+           "discovery_watchlist": ["ASMLUSDT", "CLUSDT", "THINUSDT", "BROKENUSDT", "BTCUSDT"]}
+    got, how = features.discovery_scan({"BTCUSDT"}, cfg)
+    _assert(how == "watchlist", "bulk blind + watchlist -> source 'watchlist': " + how)
+    by = {f.symbol: cls for f, cls in got}
+    _assert(by == {"ASMLUSDT": "equities", "CLUSDT": "metals"},
+            "floor(THIN)+ok(BROKEN)+exclusion(BTC) applied, classes routed: " + str(by))
+    # probe_max bounds per-cycle cost -> only the first watchlist name is read
+    cfg1 = dict(cfg); cfg1["discovery_probe_max"] = 1
+    got1, _ = features.discovery_scan({"BTCUSDT"}, cfg1)
+    _assert([f.symbol for f, c in got1] == ["ASMLUSDT"],
+            "probe_max=1 reads only the first name: " + str([f.symbol for f, c in got1]))
+    # bulk blind + NO watchlist -> stays no_bulk_surface (unchanged fail-open)
+    _, how2 = features.discovery_scan(set(), {"discovery_watchlist": []})
+    _assert(how2 == "no_bulk_surface", "bulk blind + empty watchlist -> no_bulk_surface")
+
+
 def test_discovery_marker():
     # v0.9.44: dedicated DISC-<source> line for the Recent-Signals view (the SCAN
     # d: token is budget-dropped on scored boards, so it can't answer live/blind)

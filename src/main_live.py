@@ -30,7 +30,7 @@ _SHIPPED_DEFAULTS = {
     "entries_paused": "0", "universe_discovery": "1", "invariant_sentinel": "1",
     "scaleout_frac": "0.35", "trail_atr_mult": "2.0", "time_stop_hours": "12",
     "pullback_time_stop_hours": "4", "max_concurrent": 3, "extra_symbols": [],
-    "discovery_classes": "crypto,equities,metals",
+    "discovery_classes": "crypto,equities,metals", "discovery_probe_max": 12,
 }
 
 
@@ -49,7 +49,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.44"
+ANALYSIS_VERSION = "0.9.45"
 THESIS_SOURCE = "deterministic_rules"
 
 
@@ -871,7 +871,10 @@ def _discovery_marker_due(metrics: dict, minute: int) -> bool:
     disc = metrics.get("discovery") if isinstance(metrics, dict) else None
     if not isinstance(disc, dict):
         return False
-    healthy = str(disc.get("source", "")) in ("tickers", "ticker")
+    # v0.9.45: the per-symbol "watchlist" fallback is a WORKING (if degraded)
+    # read, so it heartbeats hourly like a healthy bulk read -- only a truly
+    # blind/errored surface shouts every cycle.
+    healthy = str(disc.get("source", "")) in ("tickers", "ticker", "watchlist")
     return (not healthy) or (int(minute) == 0)
 
 

@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.44"
+version: "0.9.45"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -194,6 +194,25 @@ strategy_config:
   discovery_classes: "crypto,equities,metals"
   discovery_min_volume_usdt: "30000000"
   discovery_blocklist: []
+  # v0.9.45 -- PER-SYMBOL FALLBACK (the bulk surface is confirmed BLIND live:
+  # v0.9.44's DISC marker printed DISC-no_bulk_surface every cycle; the SDK has
+  # no tickers()/ticker(symbol="") bulk method). When the bulk read fails and
+  # discovery_watchlist is non-empty, features._discovery_watchlist_scan probes
+  # up to discovery_probe_max of these names per cycle via the proven
+  # fetch_symbol single-symbol read (same call the core 28 use), then applies
+  # the identical floor/blocklist/class-routing/per-class-cap logic. The DISC
+  # marker then reads DISC-watchlist-<n>c[-<SYM><score>]. HONEST LIMITATION:
+  # this only sees names we NAME -- it cannot enumerate the venue, so it cannot
+  # catch a brand-new UNKNOWN listing (the original fresh-listing purpose);
+  # restoring that needs a symbol-LIST endpoint (a separate investigation). The
+  # seed is liquid known RWA perps spanning all three non-crypto classes so the
+  # multi-class scan reads something real; extend/replace on the card. STILL
+  # SHADOW (logged, never traded); fail-open per symbol; probe_max bounds the
+  # added ticker cost (~probe_max extra calls/cycle only while bulk is blind).
+  discovery_watchlist: ["ASMLUSDT", "GSUSDT", "COSTUSDT", "LRCXUSDT",
+    "ANTHROPICUSDT", "OPENAIUSDT", "SMHUSDT", "SOXLUSDT", "KWEBUSDT",
+    "CLUSDT", "BZUSDT", "NATGASUSDT"]
+  discovery_probe_max: 12
   # min_score DEFENDED both ways (2026-07-06 sweep, 35d live baseline): 65 loses
   # 11pt net (slot/correlation dynamics -- more qualifiers, fewer completed
   # trades) and 75 is catastrophic (PF 0.58; the 70-75 band holds the profitable

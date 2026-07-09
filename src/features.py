@@ -662,6 +662,24 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         except Exception:
             continue
     if not rows:
+        # v0.9.45 -- BULK SURFACE BLIND (confirmed live 2026-07-09: the SDK has no
+        # tickers()/ticker(symbol="") -- DISC-no_bulk_surface every cycle). Fall
+        # back to probing a BOUNDED, explicitly-named watchlist per-symbol via the
+        # proven single-symbol read (fetch_symbol -> ticker(symbol=X), the exact
+        # call the core 28 already use). HONEST LIMITATION: this can only see names
+        # we NAME -- it cannot enumerate the venue, so it monitors known non-core
+        # names (RWA + any curated crypto) and CANNOT catch a brand-new unknown
+        # listing the way a real bulk read would. Bounded at discovery_probe_max
+        # symbols/cycle to cap the added ticker cost; fail-open per symbol.
+        watchlist = cfg.get("discovery_watchlist") or []
+        if watchlist:
+            try:
+                probe_max = int(cfg.get("discovery_probe_max", 12))
+            except (TypeError, ValueError):
+                probe_max = 12
+            return (_discovery_watchlist_scan(
+                watchlist, exclude, block, want, min_qv, per_class, probe_max,
+                exchange), "watchlist")
         return [], "no_bulk_surface"
     out = []
     for row in rows:
@@ -704,3 +722,39 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         seen[cls] = n + 1
         capped.append((f, cls))
     return capped, how
+
+
+def _discovery_watchlist_scan(watchlist, exclude, block, want, min_qv,
+                              per_class, probe_max, exchange="bitget"):
+    """v0.9.45 -- per-symbol discovery fallback for when the bulk ticker surface
+    is blind. Probes up to `probe_max` explicitly-named USDT perps through the
+    proven single-symbol read (fetch_symbol), then applies the SAME floor /
+    exclusion / blocklist / class-routing / per-class-cap logic as the bulk path.
+    Fail-open: a symbol that errors, is thin, or lacks a VWAP is skipped, never
+    fatal. Returns the capped [(SymbolFeatures, class)] list."""
+    out, seen_syms = [], set()
+    for raw in watchlist[:max(probe_max, 0)]:
+        sym = str(raw or "").upper().replace("_", "").replace("-", "")
+        if (not sym.endswith("USDT") or sym in exclude or sym in seen_syms
+                or sym[:-4] in block or sym in block):
+            continue
+        seen_syms.add(sym)
+        f = fetch_symbol(sym, exchange=exchange)
+        if not (f.ok and f.last is not None and f.high is not None
+                and f.low is not None and f.vwap is not None):
+            continue
+        if (f.quote_volume or 0.0) < min_qv:
+            continue
+        cls = classify_asset(sym[:-4])
+        if want and cls not in want:
+            continue
+        out.append((f, cls))
+    out.sort(key=lambda fc: fc[0].quote_volume or 0.0, reverse=True)
+    seen, capped = {}, []
+    for f, cls in out:
+        n = seen.get(cls, 0)
+        if n >= max(per_class, 0):
+            continue
+        seen[cls] = n + 1
+        capped.append((f, cls))
+    return capped
