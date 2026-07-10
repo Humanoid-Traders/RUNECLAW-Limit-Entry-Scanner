@@ -314,6 +314,21 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     # v0.9.7 candidate C -- time-stop profit guard: 12h clock closes losers/flats
     # only; a position in profit keeps riding the trail (the trail/locks govern).
     tstop_guard = str(cfg.get("tstop_guard", "0")).strip() in ("1", "true", "yes")
+    # v0.9.49 probe -- time-stop BREAKEVEN SCRATCH (the 2026-07-10 ADA case: the
+    # 4h clock market-closed a near-flat pullback at a local dip, -$4.09; price
+    # was back at entry within the hour). At the cap, an underwater-but-within-
+    # band position places a BREAKEVEN LIMIT at entry for a short grace window
+    # instead of closing at market: touched -> flat scratch (fees only); not
+    # touched by grace end -> close at that bar's close (which can be WORSE than
+    # the cap-bar close -- honest). 1h-bar resolution => grace is in BARS; the
+    # limit arms at the cap bar's CLOSE and can only fill on later bars (no
+    # same-bar hindsight); the protective trail/SL stays live through the grace
+    # and is checked first. Distinct axis from the killed cap-length sweeps and
+    # from tstop_guard (which rides IN-PROFIT positions). 0 = off (bit-exact
+    # legacy at-market close).
+    scratch_bars = int(float(cfg.get("timestop_scratch_bars", "0") or "0"))
+    scratch_band = float(cfg.get("timestop_scratch_band_pct", "1.0")) / 100.0
+    n_scratch_arm = 0; n_scratch_ok = 0; n_scratch_fail = 0
     # v0.9.9 candidate -- signal-strength preemption: when the slot/correlation
     # budget is full, allow a fresh candidate whose score beats the WEAKEST resting
     # limit by >= preempt_delta to cancel-and-replace it (never a filled position).
@@ -446,7 +461,24 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                 in_profit = ((c - p["fill_px"]) / p["fill_px"] if long
                              else (p["fill_px"] - c) / p["fill_px"]) > 2 * fee
                 if not (tstop_guard and in_profit):
-                    ex = (c, "time_stop")
+                    # v0.9.49 breakeven-scratch grace (see knob block above).
+                    if scratch_bars > 0 and "scr_until" not in p:
+                        loss = ((p["fill_px"] - c) / p["fill_px"] if long
+                                else (c - p["fill_px"]) / p["fill_px"])
+                        if 0.0 < loss <= scratch_band:
+                            # arm: breakeven limit rests at entry for the grace;
+                            # no close this bar (the limit exists only from the
+                            # cap bar's close onward -- no same-bar fills).
+                            p["scr_until"] = i + scratch_bars
+                            n_scratch_arm += 1
+                    if "scr_until" in p:
+                        touched = (hi >= p["fill_px"]) if long else (lo <= p["fill_px"])
+                        if i > p["scr_until"] - scratch_bars and touched:
+                            ex = (p["fill_px"], "time_stop_scratch"); n_scratch_ok += 1
+                        elif i >= p["scr_until"]:
+                            ex = (c, "time_stop"); n_scratch_fail += 1
+                    else:
+                        ex = (c, "time_stop")
             if ex:
                 close(p, ex[0], ex[1], i)
             else:
@@ -692,6 +724,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             "n_half_skip": n_half_skip, "n_cooldown_block": n_cooldown_block, "n_stoch_block": n_stoch_block,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
+            "n_scratch_arm": n_scratch_arm, "n_scratch_ok": n_scratch_ok,
+            "n_scratch_fail": n_scratch_fail,
             "n_preempt": n_preempt, "trades": trades, "max_open": max_conc}
 
 
@@ -704,7 +738,9 @@ def report(tag, st):
           f"loss-block: {st.get('n_loss_block', 0)}   chop-block: {st.get('n_chop_block', 0)}   "
           f"cond-cancel: {st.get('n_cond_cancel', 0)}   reprice: {st.get('n_reprice', 0)}   "
           f"half-skip: {st.get('n_half_skip', 0)}   cooldown: {st.get('n_cooldown_block', 0)}   stoch-block: {st.get('n_stoch_block', 0)}   "
-          f"preempt: {st.get('n_preempt', 0)}")
+          f"preempt: {st.get('n_preempt', 0)}   "
+          f"scratch: {st.get('n_scratch_ok', 0)}/{st.get('n_scratch_arm', 0)} armed "
+          f"(late-close {st.get('n_scratch_fail', 0)})")
     ms = st.get("missed") or []
     if ms:
         mc = [m["mv_cancel"] for m in ms]; m12 = [m["mv_12h"] for m in ms]
