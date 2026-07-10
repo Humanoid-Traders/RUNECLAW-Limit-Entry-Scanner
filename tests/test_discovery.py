@@ -76,9 +76,9 @@ def test_discovery_vwap_derived_from_volumes():
 def test_discovery_failopen_no_bulk_surface():
     features.data.crypto = types.SimpleNamespace(futures=types.SimpleNamespace())
     got, note = features.discovery_scan(set(), CFG)
-    # v0.9.48: with no futures bulk AND no derivatives_tickers method AND no
-    # watchlist, the note carries the enum diag -> "no_bulk_surface;e=nomethod"
-    _assert(got == [] and note == "no_bulk_surface;e=nomethod",
+    # v0.9.49: enumeration defaults OFF (live-adjudicated cross-exchange), so
+    # with no futures bulk and no watchlist the diag reads "off", not "nomethod"
+    _assert(got == [] and note == "no_bulk_surface;e=off",
             "no bulk SDK surface -> empty + named note w/ enum diag (fail-open): " + note)
 
 
@@ -228,10 +228,11 @@ def test_discovery_derivatives_enumeration():
     }
     features.fetch_symbol = lambda sym, exchange="bitget": probe.get(
         sym, features.SymbolFeatures(symbol=sym, ok=False))
+    # v0.9.49: enumeration is OPT-IN (live-adjudicated cross-exchange; default off)
     cfg = {"discovery_min_volume_usdt": "30000000", "discovery_max_per_class": 4,
-           "discovery_probe_max": 12}
+           "discovery_probe_max": 12, "discovery_enumerate": "1"}
     got, how = features.discovery_scan({"BTCUSDT"}, cfg)
-    _assert(how == "derivatives_tickers", "bulk blind + derivatives feed -> source: " + how)
+    _assert(how == "derivatives_tickers", "bulk blind + enum opted-in -> source: " + how)
     syms = [f.symbol for f, cls in got]
     _assert(syms == ["NEWCOINUSDT", "MIDUSDT"],
             "venue+perp+floor+core filters, volume-ranked, fetched+scored: " + str(syms))
