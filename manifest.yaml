@@ -617,6 +617,22 @@ strategy_config:
   # Unrecoverable mode (legacy position, unreadable plan) -> global 12h cap.
   # CAVEAT: metals had ZERO replayable pullback trades in 42d (class ~absent
   # there), so the 4h cap is unvalidated-but-low-stakes on that universe.
+  # v0.9.49 probe (research-side, 2026-07-10) -- time-stop BREAKEVEN SCRATCH,
+  # KILLED (null result; the ADA case adjudicated). Motivated by the live ADA
+  # long: the 4h clock market-closed a near-flat pullback at a local dip
+  # (-$4.09), price back at entry within the hour. Probe: at the cap, an
+  # underwater-but-within-1% position rests a BREAKEVEN LIMIT for a 1-bar (~1h)
+  # grace instead of closing at market (timestop_scratch_bars in replay_mp;
+  # protective SL live through the grace, no same-bar fills). Frozen-tape
+  # 21/35/42d + bootstrap CI vs at-market: net +0.8/-0.5/-0.5pt, PF
+  # +0.13/-0.05/-0.04, P(better)=0.504/0.493/0.495 -- coin flips everywhere.
+  # MECHANISM: the eligible class (<=1% underwater at exactly the cap) occurs
+  # only 3-5x per window; ~2 scratch flat, 1-2 late-close WORSE, benefit=cost.
+  # The interpolation probe was deliberately NOT spent -- a 3-5-event base
+  # cannot clear the all-windows bar at any parameter. Same lesson as
+  # pullback_stop_buffer_pct: one vivid anecdote, near-zero measured frequency,
+  # at-market close is fine on average. Do not re-litigate without live
+  # evidence of a RECURRING near-flat-clock-close class.
   pullback_time_stop_hours: "4"
   pullback_tp2_pct: "22"
   # v0.9.28 -- SWEPT AND KILLED; keep 0. Pads the pullback structural stop beyond
