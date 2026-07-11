@@ -674,7 +674,11 @@ def discovery_scan(exclude: set, cfg: dict, exchange: str = "bitget") -> tuple:
         # vwap/high/low, so use it as an ENUMERATION: rank the venue's USDT perps
         # by volume and fetch_symbol the top-N for full features + scoring. Unlike
         # the named watchlist this CATCHES UNKNOWN LISTINGS (the original purpose).
-        enum_on = str(cfg.get("discovery_enumerate", "1")).strip().lower() in ("1", "true", "yes")
+        # v0.9.49: default OFF -- live-adjudicated 2026-07-10: derivatives_tickers
+        # is a cross-exchange aggregator with no Bitget rows (see manifest);
+        # enumeration is opt-in ("1" on the card) so the cycle doesn't burn a
+        # useless 24k-row fetch before falling to the watchlist.
+        enum_on = str(cfg.get("discovery_enumerate", "0")).strip().lower() in ("1", "true", "yes")
         enum_syms, enum_diag = (_discovery_enumerate(exclude, block, min_qv, exchange)
                                 if enum_on else ([], "off"))
         if enum_syms:

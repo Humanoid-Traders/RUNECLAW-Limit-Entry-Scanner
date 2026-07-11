@@ -189,7 +189,8 @@ def main():
         print(f"  candidates scored this cycle: {n}")
         print(f"  top candidate: {sym} score {score}" if sym
               else "  top candidate: none scored this cycle")
-        print("  NOTE: LOUD every cycle while blind/errored; hourly (:00) heartbeat while healthy.")
+        print("  NOTE: LOUD every cycle while blind/errored; hourly heartbeat while healthy"
+              " (first cycle of each hour, minute<15 -- v0.9.47 offset-robust).")
         return
     if line.startswith("SCAN-"):
         line = line[5:]

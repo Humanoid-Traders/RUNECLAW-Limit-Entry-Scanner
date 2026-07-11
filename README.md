@@ -1,6 +1,6 @@
 # ⚔️ RUNECLAW — Limit Entry Scanner
 
-**Live on Bitget** · GetAgent playbook `runeclaw-limit-scanner` · codebase **v0.9.42** · `decision_mode: deterministic`
+**Live on Bitget** · GetAgent playbook `runeclaw-limit-scanner` · codebase **v0.9.49** · `decision_mode: deterministic`
 
 > A two-sided, **multi-asset** perpetual-futures scanner across **crypto, equities (RWA stock perps), and commodities (precious metals)** — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold), ranked by a blended deterministic score, and entered with resting limit orders at pullback depth. It does not predict direction — it waits for price to come to it, trades with the prevailing regime, and treats capital preservation as the first job.
 
@@ -212,7 +212,21 @@ skipped — which is why the equity and metal legs carry only the few names that
 clear the floor on Bitget. Energy is deferred (only WTI crude clears the floor; a
 clean universe needs a second liquid energy name to gate against). Stock perps
 track underlying equities that gap on session boundaries — off-hours liquidity is
-thinner and an event filter is a known gap.
+thinner; opted-in universes stand aside around high-importance US macro prints
+and per-symbol earnings (v0.9.5/v0.9.30 blackouts).
+
+### Shadow discovery (v0.9.38–49 — observation only, never trades)
+
+Alongside the traded universes, an opt-in **shadow discovery** scan watches
+non-core names — tokenized stocks/ETFs, commodities, and fresh crypto listings —
+scores each under its correct regime leader (`features.classify_asset` routes a
+stock to QQQ, a commodity to gold, crypto to BTC), and **logs** the candidates to
+`metrics.discovery`. Nothing trades off it: arming any discovered class is a
+separate, validated decision. Because the venue SDK exposes no Bitget-scoped bulk
+ticker (live-adjudicated), discovery reads a **named watchlist** per-symbol
+(`discovery_watchlist`, bounded by `discovery_probe_max`), and its health is
+surfaced as a dedicated **`DISC-<source>-<n>c[-<SYM><score>]`** signal line —
+loud every cycle if the read is blind, an hourly heartbeat when healthy.
 
 ---
 

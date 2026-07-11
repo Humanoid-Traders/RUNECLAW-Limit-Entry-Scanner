@@ -78,9 +78,11 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   named per-symbol fallback** (v0.9.45 — enumeration empty/off; known names only,
   no unknowns), **`no_bulk_surface` = BLIND, no watchlist**, **`error:<Type>` =
   exception path**. History: v0.9.44 found `no_bulk_surface` because the probe
-  used the wrong path (`futures.tickers`); the real bulk feed is one level up
-  (`crypto.derivatives_tickers`), wired in v0.9.46. Fallback order:
-  derivatives_tickers → watchlist → blind. `<n>c` = candidate count;
+  used the wrong path (`futures.tickers`); v0.9.46 wired `crypto.
+  derivatives_tickers`, and v0.9.48's diag **adjudicated it live: cross-exchange,
+  zero Bitget rows → PARKED** (see §7) — `discovery_enumerate` defaults "0" since
+  v0.9.49, so the effective order is **watchlist → blind** (enumeration is a
+  card-opt-in attempt). `<n>c` = candidate count;
   optional `-<SYM><score>` = top scored candidate. Cadence: **LOUD every cycle
   while blind/errored** (a persistent blind read must not hide behind the board),
   a **quiet hourly (:00) heartbeat while healthy** so SCAN owns the other cycles.
@@ -410,6 +412,7 @@ Don't re-litigate these — they were settled with replay data, not vibes.
 | score-weighted sizing (v0.9.37 probe) | **KILLED** | Floor 0.7 at score 70 → full at 90: net −4.3/−18.5/−21.5pt for ~4pt DD relief. Third confirmation that score is a threshold, not a magnitude — the 70–75 floor-grazers carry the net. Do not size by score. |
 | stochastic OB/OS entry filter (v0.9.43 probe) | **PROVEN HARM** (CI clear of zero, all windows) | net +25.7/+56.7/+78.4 → −5.8/−5.8/−10.5, PF 2.6 → 0.24; 90% CIs [−64,−2]/[−101,−27]/[−138,−43], P(better) ≤ 0.04. Vetoes ~99% of entries; the survivors catch falling knives. A mean-reversion veto strangles a trend-follower. (KER trend filter = the killed er_floor chop gate; vol-regime band = the killed vol-gate — the other two components of the same proposal were already dead.) |
 | loss cooldown after stop-out (v0.9.42 probe) | **KILLED** | −5.1pt in every window. The "revenge trade" is the re-load, and it pays — the symbol that just stopped us out is often at the extreme the strategy fades again. Every filter on fills loses (4th confirmation). |
+| discovery bulk enumeration via `derivatives_tickers` (v0.9.46–48) | **PARKED — live-adjudicated, operator decision** | The feed works (24,084 rows) but is a **cross-exchange aggregator**: zero rows carry the Bitget market label (`DISC …;e=m0of24084:Binance/BTCUSDT/v1`), so it can't isolate the venue's perps, and a global-volume rank would crowd out the RWA names discovery exists to watch. **The named watchlist is the discovery ceiling**; `discovery_enumerate` defaults "0" since v0.9.49 (card-"1" re-enables the attempt). Only untried Bitget-native path: `exchange_tickers(exchange_id="bitget")` — may be spot-only. Don't re-chase without beating this. |
 | time-stop breakeven scratch (v0.9.49 probe) | **KILLED** (null; the 2026-07-10 ADA case adjudicated) | At the 4h cap, a ≤1%-underwater position rests a breakeven limit for a ~1h grace instead of market-closing. Frozen-tape 21/35/42d: net +0.8/−0.5/−0.5pt, P(better)=0.50/0.49/0.50 — coin flips. Mechanism: the eligible class occurs only 3–5×/window; ~2 scratch flat, 1–2 late-close **worse** — benefit=cost. Same lesson as the stop buffer: one vivid anecdote, near-zero measured frequency; the at-market clock close is fine on average. Interpolation deliberately not spent (a 3–5-event base can't clear the all-windows bar). Knob stays in replay_mp (`timestop_scratch_bars`, default 0). |
 | feature timescale (v0.9.42 probe) | **24h DEFENDED** | 48h catastrophic (win% −15pts, PF halves); 12h untestable AND unshippable (the 24h window is the exchange ticker API's definition). The system's clock is optimal and structurally fixed. |
 | half-size (1-vote) regime path (v0.9.42) | **Empty, not killed** | Zero 1-vote qualified candidates in any window — dead-zone era regimes are 2-vote or neutral. Machinery stays as fail-safe. |

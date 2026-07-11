@@ -31,7 +31,7 @@ _SHIPPED_DEFAULTS = {
     "scaleout_frac": "0.35", "trail_atr_mult": "2.0", "time_stop_hours": "12",
     "pullback_time_stop_hours": "4", "max_concurrent": 3, "extra_symbols": [],
     "discovery_classes": "crypto,equities,metals", "discovery_probe_max": 12,
-    "discovery_enumerate": "1",
+    "discovery_enumerate": "0",
 }
 
 
@@ -50,7 +50,7 @@ def _config_overrides(cfg: dict) -> dict:
 # downstream consumers (journal reducer, dashboards, future reconciliation)
 # can attribute any output to the exact analysis generation that produced it.
 # The engine is deterministic end-to-end -- no LLM in the decision path.
-ANALYSIS_VERSION = "0.9.48"
+ANALYSIS_VERSION = "0.9.49"
 THESIS_SOURCE = "deterministic_rules"
 
 

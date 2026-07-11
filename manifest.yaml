@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.48"
+version: "0.9.49"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -223,12 +223,19 @@ strategy_config:
   # thing the named watchlist can't do). Fallback order in discovery_scan:
   # derivatives_tickers enumeration -> named watchlist -> no_bulk_surface; the
   # DISC source names which fired (DISC-derivatives_tickers-<n>c-<SYM><score>).
-  # NEEDS LIVE VALIDATION on deploy: the market-name match ("bitget" substring)
-  # and the symbol format from this CoinGecko-style feed are unverified offline
-  # -- read the first DISC line. derivatives_tickers-<n>c with n>0 = working;
-  # -0c = feed returned but nothing matched the venue/floor (tune the match);
-  # watchlist = enumeration empty, degraded to the named list. STILL SHADOW.
-  discovery_enumerate: "1"
+  # LIVE-ADJUDICATED 2026-07-10 (v0.9.48's diag; DISC line
+  # `watchlist;e=m0of24084:Binance/BTCUSDT/v1`): derivatives_tickers WORKS
+  # (24,084 clean rows) but is a CROSS-EXCHANGE aggregator -- zero rows carry
+  # the Bitget market label, so it cannot isolate the venue's perps; and a
+  # global-volume ranking would crowd out the RWA names discovery exists to
+  # watch. VERDICT (operator decision): enumeration PARKED; the named
+  # watchlist is the discovery ceiling. v0.9.49 flips this default to "0" so
+  # the cycle stops burning a useless 24k-row fetch before falling to the
+  # watchlist (set "1" on the card to re-enable the attempt). The only untried
+  # Bitget-native path if ever revisited: exchange_tickers(exchange_id=
+  # "bitget") -- risk: may be spot-only, not perps. Do not re-chase
+  # derivatives_tickers without beating this adjudication. STILL SHADOW.
+  discovery_enumerate: "0"
   # v0.9.47 -- DISC heartbeat cadence fix (main_live._discovery_marker_due). The
   # live 0.6.41 instance fired cycles at :03/:18/:33/:48 (a schedule offset), so
   # the exact minute==0 heartbeat NEVER matched and a HEALTHY discovery source
