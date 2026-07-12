@@ -87,6 +87,16 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   while blind/errored** (a persistent blind read must not hide behind the board),
   a **quiet hourly (:00) heartbeat while healthy** so SCAN owns the other cycles.
   Decode with `python3 research/decode.py "DISC-..."`. Diagnostic-only, never trades.
+- **Listings watcher** (2026-07-12): because the engine cannot enumerate the
+  venue (no Bitget-scoped bulk SDK surface — adjudicated), a **daily CI job**
+  (`.github/workflows/listings-watch.yml` → `research/listings_watch.py`) diffs
+  Bitget's public USDT-M contract list (697 perps at seed) against the committed
+  snapshot and **opens a GitHub issue** when new perps appear — classified via
+  the real `classify_asset` and volume-ranked against the $30M discovery floor.
+  Acting on a finding = extend `_DISC_STOCK/_ETF/_COMMODITY` and/or
+  `discovery_watchlist` (and the core universe if warranted), then rerun
+  `python3 research/listings_watch.py --update` **in the same commit** so the
+  snapshot matches the code. Report-only; never blocks.
 - `cx` suffix = circuit/ops notes, when present (v0.9.39): `-cx` = the legacy
   equity circuit is non-functional (state never persists — historical); `-dw` =
   account-day realized past the Rule-10 warn line (warn only, entries flow);

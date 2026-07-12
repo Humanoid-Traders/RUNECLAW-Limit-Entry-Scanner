@@ -1,0 +1,60 @@
+name: listings-watch
+# Daily venue-listings watcher (the "smart periodic update check"): diffs
+# Bitget's PUBLIC USDT-M perp contract list against the committed snapshot
+# (research/listings_snapshot.json) and OPENS AN ISSUE when new perps appear
+# -- new coins, new stock/ETF/commodity perps -- classified through the real
+# engine classifier and volume-ranked against the $30M discovery floor.
+# REPORT-ONLY, same philosophy as baseline-drift: it never blocks anything.
+# This exists because the engine itself cannot enumerate the venue (no
+# Bitget-scoped bulk SDK surface -- adjudicated 2026-07-10..12); CI calls the
+# public REST API instead, where no SDK constraint applies.
+# Acting on a finding = extend features._DISC_STOCK/_ETF/_COMMODITY and/or
+# discovery_watchlist (and the core universe if warranted), then rerun
+# `python3 research/listings_watch.py --update` IN THE SAME COMMIT.
+on:
+  schedule:
+    - cron: "41 6 * * *"   # daily 06:41 UTC (off-minute by convention)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Diff venue listings against snapshot
+        run: |
+          python3 research/listings_watch.py | tee listings_report.txt
+          cat listings_report.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: listings-watch-report
+          path: |
+            listings_report.txt
+            research/.listings_new.json
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: Open issue on new listings
+        if: ${{ hashFiles('research/.listings_new.json') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="listings-watch: new venue perps detected ($(date -u +%F))"
+          BODY=$(printf '```\n%s\n```\n\nAction ritual: extend the classifier allowlists / discovery_watchlist as needed, then rerun `python3 research/listings_watch.py --update` in the same commit.' "$(cat listings_report.txt)")
+          # dedupe: skip if an open listings-watch issue already exists
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+               --search "listings-watch in:title" --json number --jq 'length' | grep -qv '^0$'; then
+            echo "open listings-watch issue already exists -- appending a comment"
+            NUM=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                    --search "listings-watch in:title" --json number --jq '.[0].number')
+            gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi

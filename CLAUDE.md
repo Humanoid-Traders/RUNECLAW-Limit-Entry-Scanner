@@ -51,6 +51,12 @@ python3 research/replay_mp.py --days {21|35|42} --breakout \
 - Weekly maintenance: rerun the 3-window baseline and compare against the
   numbers recorded in manifest comments — drift beyond noise means the tape
   changed, not that killed ideas came back to life.
+- New-listings watch: a daily CI job (`listings-watch.yml` →
+  `research/listings_watch.py`) diffs Bitget's public USDT-M perp list against
+  `research/listings_snapshot.json` and opens an issue on new names (classified
+  + volume-ranked vs the $30M floor). Acting on it = extend the classifier
+  allowlists / `discovery_watchlist`, then `listings_watch.py --update` in the
+  same commit so the snapshot matches the code.
 - **Sweep on frozen tapes**: add `--data-file tape.json` so every arm runs on
   the identical dataset (re-fetching between arms compares different tapes —
   the window-drift trap, hit twice on 2026-07-08). Add `--dump-trades f.json`
