@@ -419,6 +419,23 @@ strategy_config:
   bidask_partial_ratio: "1.2"
   bidask_wall_ratio: "10.0"
   allow_short: true
+  # v0.9.49-era probe (research-side, 2026-07-13) -- MULTISLOT CASCADE, KILLED
+  # (all-windows rule). Question: max_concurrent is rarely reached (the
+  # correlation cap + one-entry-per-cycle keep the book at 1-2 names) -- would
+  # cascading the sorted qualified survivors into open slots each cycle pay?
+  # Frozen-tape 21/35/42d, --set multislot=1 vs live single-entry baseline:
+  #   21d: +22.8 -> +24.8 (+1.9, noise P=0.53)   PF 2.28 -> 1.83
+  #   35d: +64.8 -> +49.6 (-15.1, P=0.32)        PF 3.08 -> 2.05
+  #   42d: +88.1 -> +57.4 (-30.7, P=0.23)        PF 3.34 -> 1.93
+  # ~60% more trades at ~45% LESS edge per trade; PF and win% down in EVERY
+  # window, damage grows with window length; the added breakouts dilute worst
+  # (win% 77->61 at 42d); 42d loss-pause fired 66->107 (the extra trades
+  # cluster losses and choke good cycles); maxDD unchanged. MECHANISM: the
+  # runner-ups lost the pooling for a reason -- ONE-IDEA-PER-CYCLE IS A
+  # QUALITY FILTER worth ~15-30pt on the longer windows. Fifth independent
+  # confirmation of the selectivity family (min_score-75, score-sizing,
+  # requalify, market-entry). max_concurrent being unreachable is a ceiling,
+  # not a defect. Do not re-litigate without beating this A/B.
   max_concurrent: 3
   max_correlated_alts: 2
   circuit_pause_usdt: "30"
