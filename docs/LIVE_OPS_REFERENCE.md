@@ -97,6 +97,18 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   `discovery_watchlist` (and the core universe if warranted), then rerun
   `python3 research/listings_watch.py --update` **in the same commit** so the
   snapshot matches the code. Report-only; never blocks.
+- **Order-book tape collector** (2026-07-13): metals is unvalidatable offline
+  because historical order books don't exist — so we **record our own**. A CI
+  job every 30 min (`.github/workflows/book-tape.yml` → `research/book_snap.py`)
+  snapshots Bitget's public merge-depth for XAG/XAU + the thin equity perps
+  (TSLA/NVDA/MSTR/SOXL) plus ticker rows for the discovery/census watch set
+  (~5KB gz per snapshot), committed to the dedicated **`book-tapes` branch**
+  (orphan — main stays clean). Reader: `research/book_tape.py` (nearest-snapshot
+  lookup, ≤15-min gap contract, gaps stay honest — never interpolated). After
+  ~3 weeks of tape: wire replay enrichment to consume real XAG books (kills the
+  fallback cap), model equity slippage on real depth, and hand the 2026-08
+  expansion revisit a forward volume/price ledger for EVAA/KORU/SPCX from day
+  one. Report-only; a failed run is just a gap in the tape.
 - `cx` suffix = circuit/ops notes, when present (v0.9.39): `-cx` = the legacy
   equity circuit is non-functional (state never persists — historical); `-dw` =
   account-day realized past the Rule-10 warn line (warn only, entries flow);
@@ -427,6 +439,7 @@ Don't re-litigate these — they were settled with replay data, not vibes.
 | corr-cap 3 (`max_correlated_alts` 2→3, 2026-07-13 probe) | **KILLED** (all-windows rule; sixth selectivity confirmation) | Net down every window (+22.8→+14.9 / +64.8→+59.6 / +88.1→+82.9), PF down every window, P(B>A) 0.38/0.44/0.45. The third correlated alt is exactly the trade the cap exists to refuse. |
 | crypto tail expansion (+T +VELVET, 2026-07-13 probe) | **KILLED** (all-windows rule) | 28→30 symbols on frozen tapes: 21d noise (+22.8→+24.1, P=0.52), 35d +64.8→+29.9 (P=0.12), 42d +88.1→+45.0 (P=0.13), PF down every window. **Mechanism is displacement**: 35d trades fell 54→40 — tail names win the one-idea-per-cycle pooling on cycles the core traded better. Adding pool competitors dilutes the quality filter (same family as the multislot kill). |
 | equities universe expansion (3→8 names, 2026-07-13 probe) | **NOT SHIPPED** (tail rule; net was real) | Census: liquid equities catalog is ~3× the live list (SKHYNIX $268M…DRAM $53M all >$30M). 8-name arm: net UP all windows (+17.1→+36.9 / +15.8→+45.4 / +24.6→+61.8, P(B>A) 0.85–0.96) but PF 2.71→1.87 / 1.94→1.68 / 2.38→1.70 and maxDD −2.6→−10.1 / −4.6→−20.3 / −4.6→−14.8. The ONE interpolation (drop MU, the only per-symbol loser) lifted net further but the tail never recovered (PF 1.96/1.88/1.57). Ship rule is net AND tail — census names stay visible via `discovery_watchlist` + listings-watch. Re-litigate only with an arm that repairs the tail. EVAA/KORU/SPCX too young for 35/42d tapes (line-228 truncation trap) — revisit ~2026-08. |
+| equities expansion TAIL-REPAIR arm (factor cap + lev-ETF SL floor, 2026-07-13) | **KILLED** (all-windows rule) — mechanics banked | Forensics showed the expansion's DD = (a) same-bar semi co-losses, (b) SOXL churn at the crypto-tuned 2.5% floor (3× ETF ⇒ ~0.8% underlying = noise). Joint repair arm (semi factor-cap 1 + SOXL floor 4%), judged in **R-multiples** (risk-normalized; return-units overstate wide-stop DD under backward sizing): PF_R beats baseline at 21/35d (2.77→3.16, 1.96→2.53, net 2.5–3×) but 42d fails (1.73 vs 2.41) and maxDD_R 2–3× baseline everywhere; repair even worsens 42d DD vs the unrepaired arm (−3.53→−5.07 R). Helps two windows, hurts the third = not robust. Knobs stay in replay_mp (`factor_cap_group`/`factor_cap`, `lev_etf_sl_min_pct`, default off) + dumps now carry `sl_pct0`/`fill_i` for R-multiple forensics — rerun this exact pair at the ~2026-08 revisit. |
 | time-stop breakeven scratch (v0.9.49 probe) | **KILLED** (null; the 2026-07-10 ADA case adjudicated) | At the 4h cap, a ≤1%-underwater position rests a breakeven limit for a ~1h grace instead of market-closing. Frozen-tape 21/35/42d: net +0.8/−0.5/−0.5pt, P(better)=0.50/0.49/0.50 — coin flips. Mechanism: the eligible class occurs only 3–5×/window; ~2 scratch flat, 1–2 late-close **worse** — benefit=cost. Same lesson as the stop buffer: one vivid anecdote, near-zero measured frequency; the at-market clock close is fine on average. Interpolation deliberately not spent (a 3–5-event base can't clear the all-windows bar). Knob stays in replay_mp (`timestop_scratch_bars`, default 0). |
 | feature timescale (v0.9.42 probe) | **24h DEFENDED** | 48h catastrophic (win% −15pts, PF halves); 12h untestable AND unshippable (the 24h window is the exchange ticker API's definition). The system's clock is optimal and structurally fixed. |
 | half-size (1-vote) regime path (v0.9.42) | **Empty, not killed** | Zero 1-vote qualified candidates in any window — dead-zone era regimes are 2-vote or neutral. Machinery stays as fail-safe. |

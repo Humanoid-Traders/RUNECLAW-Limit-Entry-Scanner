@@ -57,6 +57,15 @@ python3 research/replay_mp.py --days {21|35|42} --breakout \
   + volume-ranked vs the $30M floor). Acting on it = extend the classifier
   allowlists / `discovery_watchlist`, then `listings_watch.py --update` in the
   same commit so the snapshot matches the code.
+- Order-book tape: a 30-min CI job (`book-tape.yml` → `research/book_snap.py`)
+  records public merge-depth for XAG/XAU + thin equity perps to the
+  **`book-tapes` branch** (reader: `research/book_tape.py`). Started 2026-07-13
+  because historical books can't be bought — after ~3 weeks of tape, replay can
+  consume real XAG books and metals stops being unvalidatable offline.
+- Trade dumps carry `sl_pct0`/`fill_i` (since 2026-07-13): judge wide-stop
+  probes in **R-multiples** (`ret_pct / (sl_pct0*100)`), not raw return-units —
+  backward sizing keeps live dollar risk constant, so return-units overstate
+  wide-stop drawdowns.
 - **Sweep on frozen tapes**: add `--data-file tape.json` so every arm runs on
   the identical dataset (re-fetching between arms compares different tapes —
   the window-drift trap, hit twice on 2026-07-08). Add `--dump-trades f.json`
