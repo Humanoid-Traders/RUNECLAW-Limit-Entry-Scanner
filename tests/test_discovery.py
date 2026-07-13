@@ -141,6 +141,9 @@ def test_classify_asset_routing():
     # v0.9.43: energy bases fixed to the venue's real forms (were falling to BTC)
     _assert(features.classify_asset("BZ") == "metals", "Brent (BZ) -> commodity/metals leader (was BTC)")
     _assert(features.classify_asset("NATGAS") == "metals", "NatGas (NATGAS) -> commodity/metals leader (was BTC)")
+    # v0.9.50: venue lists SK Hynix under TWO bases; the short form fell to BTC
+    _assert(features.classify_asset("SKHY") == "equities", "SKHY (short-form SK Hynix) -> equities (was BTC)")
+    _assert(features.classify_asset("SKHYNIX") == "equities", "SKHYNIX (long form) -> equities")
 
 
 def test_discovery_multiclass_and_per_class_cap():

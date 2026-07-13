@@ -1,6 +1,6 @@
 name: runeclaw-limit-scanner
 display_name: "RUNECLAW Limit Entry Scanner"
-version: "0.9.49"
+version: "0.9.50"
 description: "Live multi-asset perpetual-futures scanner across crypto, equities (RWA US stock perps), and commodities (precious metals) — each class gated by its own market-regime leader (BTC / Nasdaq-QQQ / gold) — placing pullback limit longs or shorts with portfolio-level risk controls"
 long_description: |
   RUNECLAW is a two-sided, multi-asset scanner for USDT-margined perpetual
@@ -53,6 +53,16 @@ long_description: |
   performance is not a guarantee, and live trading pays fees and slippage that
   erode edge, so size every position to a drawdown you can tolerate.
 market_type: contract
+# v0.9.50-era probe (research-side, 2026-07-13) -- CRYPTO TAIL EXPANSION
+# (+TUSDT +VELVETUSDT, the only census names above the $30M floor not already
+# here), KILLED (all-windows rule). Frozen-tape 28 vs 30 symbols:
+#   21d: +22.8 -> +24.1 (noise, P=0.52)   35d: +64.8 -> +29.9 (P=0.12)
+#   42d: +88.1 -> +45.0 (P=0.13)          PF down every window (3.08->1.93 at 35d)
+# MECHANISM IS DISPLACEMENT, not bad names in isolation: 35d trade count fell
+# 54 -> 40 -- the tail names win the one-idea-per-cycle pooling on cycles the
+# core would have traded better. Same family as the multislot kill: the
+# pooling is a quality filter; adding pool competitors dilutes it. Do not
+# re-litigate without beating this A/B on the same frozen tapes.
 trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "LABUSDT", "ZECUSDT", "XRPUSDT", "DOGEUSDT", "TAOUSDT", "HYPEUSDT", "BNBUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "ENAUSDT", "ONDOUSDT", "BCHUSDT", "AVAXUSDT", "NEARUSDT", "AAVEUSDT", "WLDUSDT", "XPLUSDT", "XLMUSDT", "TRUMPUSDT", "MUSDT", "INJUSDT", "SEIUSDT", "PEPEUSDT", "SHIBUSDT"]
 tags: ["scanner", "momentum", "vwap", "orderbook", "contract", "live", "runeclaw"]
 
@@ -437,6 +447,15 @@ strategy_config:
   # requalify, market-entry). max_concurrent being unreachable is a ceiling,
   # not a defect. Do not re-litigate without beating this A/B.
   max_concurrent: 3
+  # v0.9.50-era probe (research-side, 2026-07-13) -- CORR-CAP 3, KILLED
+  # (all-windows rule; sixth confirmation of the selectivity family).
+  # Question: does raising max_correlated_alts 2 -> 3 unlock activity?
+  # Frozen-tape 21/35/42d, --set max_correlated_alts=3 vs baseline:
+  #   21d: +22.8 -> +14.9   35d: +64.8 -> +59.6   42d: +88.1 -> +82.9
+  # Net DOWN in every window (P(B>A) 0.38/0.44/0.45 -- no evidence of
+  # benefit), PF down in every window. The third correlated alt is exactly
+  # the trade the cap exists to refuse. Do not re-litigate without beating
+  # this A/B on the same frozen tapes.
   max_correlated_alts: 2
   circuit_pause_usdt: "30"
   circuit_stop_usdt: "40"
@@ -759,6 +778,26 @@ strategy_config:
     # event_blackout) were silently DROPPED by _universes() since v0.6.0 --
     # equities actually ran pullback-only at the global 4% ext cap the whole
     # time. The passthrough is fixed; these flags are now effective.
+    # v0.9.50-era probe (research-side, 2026-07-13) -- EQUITIES UNIVERSE
+    # EXPANSION, NOT SHIPPED (tail rule). The 2026-07-13 venue census found the
+    # liquid equities catalog is now ~3x this list (SKHYNIX $268M, KORU $208M,
+    # SNDK $147M, SOXL $128M, SPCX $101M, MU $92M, DRAM $53M -- all above the
+    # $30M floor). Frozen-tape QQQ-led A/B, 3-name baseline vs 8-name arm
+    # (+SKHYNIX/SNDK/SOXL/DRAM/MU; KORU/SPCX excluded -- too young for the
+    # windows, the line-228 min-length truncation trap):
+    #   NET (all windows UP):  21d +17.1->+36.9  35d +15.8->+45.4  42d +24.6->+61.8
+    #   TAIL (all windows DOWN): PF 2.71->1.87 / 1.94->1.68 / 2.38->1.70;
+    #                            maxDD -2.6->-10.1 / -4.6->-20.3 / -4.6->-14.8
+    # The ONE allowed interpolation (drop MU, the only per-symbol net loser)
+    # raised net further (+45.4/+58.4/+53.8, P(B>A) 0.91/0.96/0.85) but the
+    # tail NEVER recovered (PF 1.96/1.88/1.57, maxDD -8.2/-12.6/-9.4).
+    # MECHANISM: the new names triple gross activity and the drawdowns
+    # cluster -- net-vs-tail is a real trade-off here, and the ship rule is
+    # net AND tail winners in ALL windows. Verdict: keep the 3-name universe;
+    # the census names stay VISIBLE via discovery_watchlist + listings-watch.
+    # Re-litigate only with an arm that repairs the tail (not by relaxing the
+    # rule). Fresh listings EVAA/KORU/SPCX are untestable at 35/42d until
+    # their tapes mature -- revisit ~2026-08.
     - name: "equities"
       leader: "QQQUSDT"
       symbols: ["TSLAUSDT", "NVDAUSDT", "MSTRUSDT"]
