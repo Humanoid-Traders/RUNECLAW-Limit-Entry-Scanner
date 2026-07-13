@@ -1,0 +1,60 @@
+name: book-tape
+# Order-book tape collector: snapshots Bitget's PUBLIC merge-depth for the
+# metals + thin-equity watch set (plus discovery/census ticker rows) every 30
+# minutes and commits them to the dedicated data branch `book-tapes` (orphan;
+# main stays clean). THE POINT: metals is unvalidatable offline because
+# historical order books don't exist -- the only way to ever have them is to
+# start recording them (adjudicated 2026-07-13). After ~3 weeks of tape,
+# replay enrichment can consume real XAG books instead of the degraded
+# fallback, and equity-perp slippage modeling gets real depth data.
+# REPORT-ONLY philosophy: a failed run = an honest gap in the tape; nothing
+# downstream breaks. Cadence is a cost decision (48 short runs/day); tighten
+# to */15 only if the org's Actions budget allows.
+on:
+  schedule:
+    - cron: "3,33 * * * *"   # every 30 min, off the :00/:30 herd
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: book-tape
+  cancel-in-progress: false
+
+jobs:
+  snap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Collect snapshot
+        run: python3 research/book_snap.py --outdir snap_out
+      - name: Commit to book-tapes branch
+        run: |
+          git config user.name "book-tape-bot"
+          git config user.email "noreply@github.com"
+          # fetch the data branch if it exists; otherwise start it orphan
+          if git fetch origin book-tapes 2>/dev/null; then
+            git checkout -B book-tapes origin/book-tapes
+          else
+            git checkout --orphan book-tapes
+            git rm -rf --quiet . || true
+            printf '# book-tapes\nOrder-book snapshot tape (see research/book_snap.py on main).\n' > README.md
+            git add README.md
+          fi
+          mkdir -p tapes
+          cp -r snap_out/* tapes/
+          git add tapes
+          git commit -m "snap $(date -u +%FT%H:%MZ)" || { echo "nothing to commit"; exit 0; }
+          # push with retry: another run may have pushed since our fetch
+          for i in 1 2 3; do
+            git push origin book-tapes && exit 0
+            git fetch origin book-tapes
+            git rebase origin/book-tapes || { git rebase --abort; git reset --soft origin/book-tapes; }
+            sleep $((2**i))
+          done
+          git push origin book-tapes

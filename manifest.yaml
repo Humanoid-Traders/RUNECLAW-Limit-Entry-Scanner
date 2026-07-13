@@ -798,6 +798,15 @@ strategy_config:
     # Re-litigate only with an arm that repairs the tail (not by relaxing the
     # rule). Fresh listings EVAA/KORU/SPCX are untestable at 35/42d until
     # their tapes mature -- revisit ~2026-08.
+    # 2026-07-13 SAME-DAY ADDENDUM -- the tail-repair arm was run and KILLED.
+    # Forensics: the expansion DD = same-bar semi co-losses + SOXL churn at
+    # the crypto-tuned 2.5% floor (3x ETF => noise). Joint repair (semi
+    # factor-cap 1 + SOXL sl floor 4%), judged in R-multiples: PF_R BEATS
+    # baseline at 21/35d (2.77->3.16, 1.96->2.53) but 42d fails (1.73 vs
+    # 2.41) and maxDD_R is 2-3x baseline everywhere. Helps two windows,
+    # hurts the third = not robust. Probe knobs banked in replay_mp
+    # (factor_cap_group/factor_cap, lev_etf_sl_min_pct); rerun the exact
+    # pair at the 2026-08 revisit.
     - name: "equities"
       leader: "QQQUSDT"
       symbols: ["TSLAUSDT", "NVDAUSDT", "MSTRUSDT"]

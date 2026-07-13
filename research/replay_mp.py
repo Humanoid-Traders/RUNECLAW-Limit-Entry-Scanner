@@ -45,6 +45,11 @@ features, scoring, risk = R.features, R.scoring, R.risk
 # budget, opposite-side names earn a hedge credit. When all corr~=1 it reproduces
 # the count cap (safe floor); when corr spikes it auto-tightens (the point).
 _CORR_PRIOR = 0.85          # assume crypto names ~0.85 corr when history is thin
+# v0.9.50 -- leveraged-ETF perps on the venue (for the lev_etf_sl_min_pct
+# probe): instruments whose quoted price already embeds 2-3x leverage, so a
+# stop floor tuned on 1x crypto alts sits inside their noise band.
+_LEV_ETF = frozenset("""SOXLUSDT SOXSUSDT TQQQUSDT SQQQUSDT SPXLUSDT TNAUSDT
+KORUUSDT CONLUSDT RAMUUSDT DFENUSDT EUVUSDT UVXYUSDT""".split())
 _MIN_RET_PTS = 6
 
 
@@ -258,6 +263,33 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
     # a trend-follower asking a mean-reversion oscillator for permission. Gate a
     # qualified LONG only if %K <= stoch_oversold (deep pullback), a SHORT only if
     # %K >= stoch_overbought. %K over stoch_period 1h bars.
+    # v0.9.50 probes -- EQUITIES-EXPANSION TAIL REPAIR (2026-07-13 forensics:
+    # the expansion's maxDD is (a) same-bar co-losses among same-factor semi
+    # names and (b) SOXL churn -- every SOXL SL exits at exactly the 2.5%
+    # sl_min_alt floor, which was tuned on crypto alts; on a 3x leveraged ETF
+    # 2.5% is ~0.8% of underlying, pure noise). Two default-off knobs:
+    #   factor_cap_group : '+'-separated symbols treated as ONE factor (e.g.
+    #     NVDAUSDT+SKHYNIXUSDT+SNDKUSDT+SOXLUSDT+DRAMUSDT); factor_cap (default
+    #     1) = max concurrent owned names from the group. Candidate-dependent,
+    #     so it ABORTS the cycle like the corr_budget gate (faithful to live
+    #     one-idea-per-cycle; runner-ups do not inherit the slot).
+    #   lev_etf_sl_min_pct : replaces sl_min_alt_pct for names in _LEV_ETF
+    #     (leveraged ETFs). Risk-neutral by construction: sizing solves
+    #     backward from the wider stop (same max_loss_usdt, smaller notional)
+    #     -- BUT the report sums RETURN-units, so judge this knob on
+    #     R-multiples too (ret_pct / sl_pct0, now in the trade dump).
+    factor_grp = frozenset(s.strip().upper() for s in
+                           str(cfg.get("factor_cap_group", "") or "").split("+") if s.strip())
+    try:
+        factor_cap = int(cfg.get("factor_cap", 1))
+    except (TypeError, ValueError):
+        factor_cap = 1
+    try:
+        lev_sl = float(cfg.get("lev_etf_sl_min_pct", "0") or "0")
+    except (TypeError, ValueError):
+        lev_sl = 0.0
+    n_factor_block = 0
+
     stoch_on = str(cfg.get("stoch_filter", "0")).strip().lower() in ("1", "true", "yes")
     try:
         stoch_p = int(cfg.get("stoch_period", 14))
@@ -403,7 +435,11 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
         if _r < 0:
             last_loss_i[p["sym"]] = at   # v0.9.42: feeds the loss-cooldown probe
         trades.append({"sym": p["sym"], "side": p["side"], "mode": p["mode"],
-                       "ret_pct": _r, "reason": why, "exit_i": at})
+                       "ret_pct": _r, "reason": why, "exit_i": at,
+                       # v0.9.50 forensics fields: entry bar + ORIGINAL stop
+                       # width, so dumps support overlap analysis and
+                       # risk-normalized R-multiples (ret_pct / sl_pct0).
+                       "fill_i": p.get("fill_i"), "sl_pct0": p.get("sl_pct0")})
 
     for i in range(25, n - 1):
         # 1) manage open positions
@@ -495,7 +531,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                 opens.append({"sym": q["sym"], "side": q["side"], "mode": "pullback",
                               "fill_px": q["entry"], "sl": pl.sl_price, "tp1": pl.tp1, "tp2": pl.tp2,
                               "atr": pl.atr or 0.0, "fill_i": i, "hw": q["entry"], "trail": pl.sl_price,
-                              "score": q.get("score", 0.0)})
+                              "score": q.get("score", 0.0), "sl_pct0": pl.sl_pct})
                 continue
             run = ((c - q["entry"]) / q["entry"]) if long else ((q["entry"] - c) / q["entry"])
             if run > chase: n_chase += 1; missed.append(_missed(kl, q, i, "chase")); continue
@@ -631,13 +667,19 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     if _corr_exposure(kl, cand.symbol, cand.side, cur_held, i, corr_look, hedge_credit) >= corr_budget:
                         n_corr_block += 1
                         continue
+                if factor_grp and cand.symbol in factor_grp:
+                    if sum(1 for s in set(cur_owned) if s in factor_grp) >= factor_cap:
+                        n_factor_block += 1
+                        continue
                 if _enrich(cand, kl, kl4, i, cfg):
                     continue
                 if _vlo > 0 or _vhi < 99999:
                     rv = R.realized_vol(kl[cand.symbol][max(0, i - 31):i + 1], int(cfg.get("vol_lookback", 30)))
                     if rv is not None and (rv < _vlo or rv > _vhi):
                         continue
-                plan = risk.build_plan(cand.features, cfg, cand.size_factor, side=cand.side, entry_mode=cand.entry_mode)
+                _cfgp = ({**cfg, "sl_min_alt_pct": str(lev_sl)}
+                         if lev_sl > 0 and cand.symbol in _LEV_ETF else cfg)
+                plan = risk.build_plan(cand.features, _cfgp, cand.size_factor, side=cand.side, entry_mode=cand.entry_mode)
                 if plan is None or not plan.sizing_ok:
                     continue
                 n_sig += 1
@@ -645,7 +687,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                     opens.append({"sym": cand.symbol, "side": cand.side, "mode": "breakout",
                                   "fill_px": cand.features.last, "sl": plan.sl_price, "tp1": plan.tp1, "tp2": plan.tp2,
                                   "atr": plan.atr or 0.0, "fill_i": i, "hw": cand.features.last, "trail": plan.sl_price,
-                                  "score": cand.score})
+                                  "score": cand.score, "sl_pct0": plan.sl_pct})
                 else:
                     cur = cand.features.last
                     gap = ((plan.entry - cur) / plan.entry) if cand.side == "short" else ((cur - plan.entry) / plan.entry)
@@ -663,6 +705,12 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             if _corr_exposure(kl, best.symbol, best.side, held, i, corr_look, hedge_credit) >= corr_budget:
                 n_corr_block += 1
                 continue
+        # v0.9.50 factor cap: candidate-dependent like corr_budget, so it aborts
+        # the cycle (one-idea-per-cycle: runner-ups do not inherit the slot).
+        if factor_grp and best.symbol in factor_grp:
+            if sum(1 for s in set(owned) if s in factor_grp) >= factor_cap:
+                n_factor_block += 1
+                continue
         if _enrich(best, kl, kl4, i, cfg):
             continue
         # AlphaAgent-style vol-regime gate: stand aside outside [vol_floor, vol_ceiling]
@@ -671,7 +719,9 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             rv = R.realized_vol(kl[best.symbol][max(0, i - 31):i + 1], int(cfg.get("vol_lookback", 30)))
             if rv is not None and (rv < vlo or rv > vhi):
                 continue
-        plan = risk.build_plan(best.features, cfg, best.size_factor, side=best.side, entry_mode=best.entry_mode)
+        _cfgp = ({**cfg, "sl_min_alt_pct": str(lev_sl)}
+                 if lev_sl > 0 and best.symbol in _LEV_ETF else cfg)
+        plan = risk.build_plan(best.features, _cfgp, best.size_factor, side=best.side, entry_mode=best.entry_mode)
         if plan is None or not plan.sizing_ok:
             continue
         # v0.9.9 preemption resolution: if we reached here while the budget was full,
@@ -690,7 +740,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             opens.append({"sym": best.symbol, "side": best.side, "mode": "breakout",
                           "fill_px": best.features.last, "sl": plan.sl_price, "tp1": plan.tp1, "tp2": plan.tp2,
                           "atr": plan.atr or 0.0, "fill_i": i, "hw": best.features.last, "trail": plan.sl_price,
-                          "score": best.score})
+                          "score": best.score, "sl_pct0": plan.sl_pct})
         else:
             cur = best.features.last
             gap = ((plan.entry - cur) / plan.entry) if best.side == "short" else ((cur - plan.entry) / plan.entry)
@@ -708,7 +758,8 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
                               "fill_px": c0, "sl": plan.sl_price * r0,
                               "tp1": plan.tp1 * r0, "tp2": plan.tp2 * r0,
                               "atr": plan.atr or 0.0, "fill_i": i, "hw": c0,
-                              "trail": plan.sl_price * r0, "score": best.score})
+                              "trail": plan.sl_price * r0, "score": best.score,
+                              "sl_pct0": plan.sl_pct})
                 continue
             pends.append({"sym": best.symbol, "side": best.side, "entry": plan.entry,
                           "placed_i": i, "plan": plan, "score": best.score,
@@ -723,6 +774,7 @@ def simulate_mp(cfg, symbols, days, use_breakout, data=None):
             "missed": missed, "n_cond_cancel": n_cond_cancel, "n_reprice": n_reprice,
             "n_half_skip": n_half_skip, "n_cooldown_block": n_cooldown_block, "n_stoch_block": n_stoch_block,
             "n_corr_block": n_corr_block, "n_heat_block": n_heat_block,
+            "n_factor_block": n_factor_block,
             "n_loss_block": n_loss_block, "n_chop_block": n_chop_block,
             "n_scratch_arm": n_scratch_arm, "n_scratch_ok": n_scratch_ok,
             "n_scratch_fail": n_scratch_fail,
