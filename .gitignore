@@ -9,6 +9,8 @@ dist/
 
 # Runtime state (not persisted between scheduled runs; never commit)
 .state/
+research/.deadman_alert.json
+research/.listings_new.json
 
 # Environments
 .venv/

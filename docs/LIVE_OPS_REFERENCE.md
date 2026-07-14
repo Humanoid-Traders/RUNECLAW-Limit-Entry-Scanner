@@ -97,6 +97,18 @@ real." (`_scan_digest`, `src/main_live.py:552-584`)
   `discovery_watchlist` (and the core universe if warranted), then rerun
   `python3 research/listings_watch.py --update` **in the same commit** so the
   snapshot matches the code. Report-only; never blocks.
+- **Dead-man's switch** (2026-07-14): every 15 min a CI job
+  (`.github/workflows/deadman.yml` → `research/deadman.py`) reads the
+  authenticated control plane (`GET /api/v1/playbook/my-playbooks`, via the
+  `GETAGENT_ACCESS_KEY` repo secret — encrypted store only, never in-repo) and
+  **opens a loud issue when the board is dark** (instance disabled, missing, or
+  control plane unreachable), auto-closing on recovery. Guards ledger rule 7
+  (dark-board hours, 2026-07-07 scar): it catches the
+  flatten→deploy→forget-to-re-enable gap and the accidental card-click class.
+  An alert during an intentional flatten window IS the re-enable reminder.
+  Adjudicated limit: no signal-history endpoint exists behind the key (plausible
+  paths 403 at the gateway — same wall class as `metrics.discovery`), so a
+  scheduler stall while `status=active` remains undetectable from outside.
 - **Order-book tape collector** (2026-07-13): metals is unvalidatable offline
   because historical order books don't exist — so we **record our own**. A CI
   job every 30 min (`.github/workflows/book-tape.yml` → `research/book_snap.py`)

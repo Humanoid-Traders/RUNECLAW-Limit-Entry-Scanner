@@ -57,6 +57,11 @@ python3 research/replay_mp.py --days {21|35|42} --breakout \
   + volume-ranked vs the $30M floor). Acting on it = extend the classifier
   allowlists / `discovery_watchlist`, then `listings_watch.py --update` in the
   same commit so the snapshot matches the code.
+- Dead-man's switch: a 15-min CI job (`deadman.yml` → `research/deadman.py`,
+  auth via the `GETAGENT_ACCESS_KEY` repo secret) opens an issue when the live
+  instance is not `active` and auto-closes on recovery — rule 7's enforcement
+  arm. No signal-history endpoint exists (403 wall); instance status is the
+  observable ceiling.
 - Order-book tape: a 30-min CI job (`book-tape.yml` → `research/book_snap.py`)
   records public merge-depth for XAG/XAU + thin equity perps to the
   **`book-tapes` branch** (reader: `research/book_tape.py`). Started 2026-07-13
