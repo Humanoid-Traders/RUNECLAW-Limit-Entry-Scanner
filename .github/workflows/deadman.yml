@@ -1,0 +1,60 @@
+name: deadman
+# Dead-man's switch: every 15 min, verify the live RUNECLAW deployment is
+# ACTIVE via the authenticated control plane (my-playbooks). Opens a loud
+# issue the moment the board goes dark -- instance disabled, missing, or
+# control plane unreachable -- and closes it automatically on recovery.
+# THE SCAR: 2026-07-07 reconciliation proved dark-board hours (engine not
+# running) cost more than slippage or parameters ever did; ledger rule 7 is
+# "uptime beats parameters". An alert during an intentional flatten window
+# is the re-enable reminder, not noise.
+# Requires the GETAGENT_ACCESS_KEY repository secret (added 2026-07-14,
+# operator-held Bitget OpenAPI key; encrypted store only, never in-repo).
+on:
+  schedule:
+    - cron: "11,26,41,56 * * * *"   # every 15 min, off the :00 herd
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: deadman
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check live deployment status
+        env:
+          GETAGENT_ACCESS_KEY: ${{ secrets.GETAGENT_ACCESS_KEY }}
+        run: python3 research/deadman.py | tee deadman_report.txt
+      - name: Raise or clear the alarm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                   --search "deadman in:title" --json number --jq '.[0].number // empty')
+          if [ -f research/.deadman_alert.json ]; then
+            KIND=$(python3 -c "import json;print(json.load(open('research/.deadman_alert.json'))['kind'])")
+            BODY=$(printf 'DEAD-MAN ALERT (`%s`)\n\n```\n%s\n```\n\nChecked: `GET /api/v1/playbook/my-playbooks` at %s\nThis issue auto-closes when the instance is active again.' \
+                   "$KIND" "$(cat deadman_report.txt)" "$(date -u +%FT%H:%M:%SZ)")
+            if [ -n "$OPEN" ]; then
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" \
+                --title "deadman: live board is DARK ($(date -u +%F' '%H:%M) UTC)" \
+                --body "$BODY"
+            fi
+            exit 1   # red run = dark board, visible in the Actions list too
+          elif [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" \
+              --body "RECOVERED: instance is active again ($(date -u +%FT%H:%M:%SZ)). Auto-closing."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY"
+          fi
